@@ -236,6 +236,54 @@ cleanup                 # 清理过期数据
 
 ---
 
+## 在新项目中使用 /swarm
+
+Agent Swarm 作为常驻服务运行。任何新项目只需安装 swarm skill，即可在 VS Code Claude Code 中用 `/swarm` 触发调度。
+
+### 安装
+
+```bash
+# 从 Agent Swarm 目录执行
+# Linux/Mac
+./install-skill.sh /path/to/your-project
+
+# Windows
+install-skill.bat C:\path\to\your-project
+```
+
+### 手动安装
+
+把这两个文件复制到新项目：
+
+```
+你的新项目/
+├── .claude/skills/swarm/SKILL.md    ← 从 Agent Swarm 复制
+└── CLAUDE.md                        ← 加一行 skills 引用
+```
+
+CLAUDE.md 里加：
+
+```markdown
+## Skills 速查
+| 触发 | Skill | 来源 |
+|------|-------|------|
+| 启动 Agent 调度 | `swarm` | Agent Swarm |
+```
+
+### 使用
+
+确保 Agent Swarm 服务器在运行（`pnpm dev`），然后在新项目的 VS Code Claude Code 中说：
+
+```
+/swarm 帮我重构所有错误处理
+```
+
+Agent Swarm 会自动在新项目中创建对应的项目记录、注册 Agent、拆解任务并执行。
+
+> 原理：`/swarm` skill 通过 HTTP API 调用 Agent Swarm 服务器（`localhost:5120`），任务在 Agent Swarm 中管理，Claude Code 在新项目的工作目录下执行。
+
+---
+
 ## Docker 部署
 
 ```bash
