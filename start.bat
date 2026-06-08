@@ -11,12 +11,43 @@ echo.
 
 cd /d "%~dp0"
 
-:: ── Step 1: Check Node.js ──────────────────────────────
+:: ── Step 1: Check/Install Node.js ─────────────────────
 echo  [1/4] 检查 Node.js...
 node --version >nul 2>&1
 if errorlevel 1 (
-    echo  ❌ 未找到 Node.js
-    echo  请访问 https://nodejs.org 下载安装 Node.js 22+
+    echo  未检测到 Node.js，尝试自动安装...
+
+    :: Try winget (Windows 10/11 built-in)
+    where winget >nul 2>&1
+    if not errorlevel 1 (
+        echo  使用 winget 安装 Node.js LTS...
+        winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+        if errorlevel 1 (
+            echo  ❌ winget 安装失败，尝试 choco...
+        ) else (
+            echo  ✅ Node.js 安装完成，请重新运行 start.bat
+            echo  （安装后需要重启终端使环境变量生效）
+            pause
+            exit /b 0
+        )
+    )
+
+    :: Try chocolatey
+    where choco >nul 2>&1
+    if not errorlevel 1 (
+        echo  使用 chocolatey 安装 Node.js...
+        choco install nodejs-lts -y
+        if not errorlevel 1 (
+            echo  ✅ Node.js 安装完成，请重新运行 start.bat
+            pause
+            exit /b 0
+        )
+    )
+
+    :: Fallback: open download page
+    echo  无法自动安装，正在打开 Node.js 下载页面...
+    start https://nodejs.org/zh-cn/download
+    echo  请下载安装 Node.js LTS 版本后重新运行 start.bat
     pause
     exit /b 1
 )
