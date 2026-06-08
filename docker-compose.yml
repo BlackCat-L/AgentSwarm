@@ -1,0 +1,13 @@
+version: "3.9"
+services:
+  agent-swarm:
+    build: .
+    ports:
+      - "5120:5120"
+    environment:
+      - NODE_ENV=production
+      - PORT=5120
+    volumes:
+      - ./data:/app/data
+      - ~/.claude:/root/.claude:ro
+    restart: unless-stopped

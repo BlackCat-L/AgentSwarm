@@ -1,0 +1,14 @@
+.env
+.env.local
+.env.production
+.pem
+credentials.json
+credentials.yml
+id_rsa
+id_ed25519
+.npmrc
+secrets.yaml
+secrets.json
+appsettings.Production.json
+key.pem
+cert.pem

@@ -1,0 +1,9 @@
+packages:
+  - "packages/shared"
+  - "packages/server"
+  - "packages/web"
+  - "packages/cli"
+
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true

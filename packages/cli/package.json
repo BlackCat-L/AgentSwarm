@@ -1,0 +1,26 @@
+{
+  "name": "@agent-swarm/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent Swarm CLI — aswarm 命令行工具",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "aswarm": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@agent-swarm/shared": "workspace:*",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

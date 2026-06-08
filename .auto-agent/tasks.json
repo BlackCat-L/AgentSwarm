@@ -1,0 +1,2804 @@
+{
+  "project": "agent-swarm-dark-factory",
+  "version": "1.0.0",
+  "created": "2026-06-04",
+  "methodology": "Harness Pipeline as Code + auto-agent 严格模式",
+  "prd": ".claude/plans/toasty-yawning-manatee.md",
+  "total_tasks": 100,
+  "phases": {
+    "1.1": "骨架搭建—Monorepo+类型+SQL+引擎 (25 tasks, 14天)",
+    "1.2": "Agent并行执行+Web UI (23 tasks, 14天)",
+    "2.1": "完善交互+Hermes/OpenClaw Provider (16 tasks, 14天)",
+    "2.2": "工作流自动化+Agent定义 (14 tasks, 14天)",
+    "3.1": "增强体验+通知+文档 (9 tasks, 14天)",
+    "3.2": "生产化+Electron+测试+安全 (15 tasks, 14天)"
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "phase": "1.1",
+      "title": "Monorepo初始化+pnpm workspace",
+      "description": "创建packages/web,server,shared,cli。pnpm-workspace.yaml+tsconfig.base.json。",
+      "passes": true,
+      "acceptance_criteria": [
+        "pnpm install成功",
+        "TypeScript项目引用正确"
+      ],
+      "steps": [
+        "创建目录",
+        "配置workspace",
+        "安装基础依赖",
+        "验证构建"
+      ],
+      "dependencies": [],
+      "critical_files": [
+        "pnpm-workspace.yaml",
+        "package.json",
+        "tsconfig.base.json"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-002",
+      "phase": "1.1",
+      "title": "共享类型定义packages/shared",
+      "description": "TaskNode/AgentInstance/Project/SessionStatus/SessionEvent/AgentOutputEvent等。",
+      "passes": true,
+      "acceptance_criteria": [
+        "所有PRD Provider类型已定义",
+        "TaskNode含25+字段与SQL对齐",
+        "SessionEvent覆盖所有事件"
+      ],
+      "steps": [
+        "创建types/子目录",
+        "实现所有类型定义",
+        "编译验证tsc --noEmit"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "critical_files": [
+        "packages/shared/src/types/"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-003",
+      "phase": "1.1",
+      "title": "SQLite Schema建表+迁移",
+      "description": "sql.js 9张表(projects/agents/tasks/cost_events/messages/workflows/error_events/dependencies/capabilities)。幂等迁移脚本。",
+      "passes": true,
+      "acceptance_criteria": [
+        "9张表与PRD DDL完全一致",
+        "CHECK约束生效",
+        "外键CASCADE生效",
+        "所有索引创建",
+        "迁移幂等"
+      ],
+      "steps": [
+        "创建schema.ts",
+        "创建migrate.ts",
+        "创建connection.ts",
+        "验证表结构+外键约束"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "critical_files": [
+        "packages/server/src/db/schema.ts",
+        "packages/server/src/db/migrate.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-004",
+      "phase": "1.1",
+      "title": "TaskGraph引擎—创建/查询/分配",
+      "description": "createTask/getTask/queryTasks/assignTask。sql.js prepared-statement+乐观锁(version)。参考AgentManager。",
+      "passes": true,
+      "acceptance_criteria": [
+        "createTask含所有必填字段",
+        "queryTasks支持多维过滤",
+        "assignTask乐观锁生效",
+        "并发分配仅一个成功"
+      ],
+      "steps": [
+        "创建task-graph.ts",
+        "实现CRUD+乐观锁assign",
+        "编写vitest单元测试(SQLite :memory:)"
+      ],
+      "dependencies": [
+        "TASK-002",
+        "TASK-003"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/task-graph.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-005",
+      "phase": "1.1",
+      "title": "TaskGraph—DAG依赖+循环检测+级联阻塞",
+      "description": "addDependencies/wouldCreateCycle(BFS)/completeTask自动解除阻塞/failTask级联阻塞依赖。",
+      "passes": true,
+      "acceptance_criteria": [
+        "BFS检测循环(含间接循环100节点)",
+        "completeTask自动unblock",
+        "failTask自动block依赖",
+        "maxRetries耗尽不可解除"
+      ],
+      "steps": [
+        "实现addDependencies+wouldCreateCycle(BFS+index优化)",
+        "实现completeTask+unblockDependents",
+        "实现failTask+blockDependents",
+        "编写边界测试(self-loop/indirect/large DAG)"
+      ],
+      "dependencies": [
+        "TASK-004"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/task-graph.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-006",
+      "phase": "1.1",
+      "title": "Agent能力评分引擎",
+      "description": "EMA(α=0.3)指数移动平均。upsertCapabilityProfile/recordTaskOutcome/scoreAgent。",
+      "passes": true,
+      "acceptance_criteria": [
+        "EMA成功率正确收敛",
+        "无标签时用可靠性评分",
+        "多次成功后>0.9",
+        "多次失败后<0.3"
+      ],
+      "steps": [
+        "创建capability-scorer.ts",
+        "实现upsert/recordTaskOutcome/scoreAgent",
+        "编写收敛性测试(模拟10次成功)"
+      ],
+      "dependencies": [
+        "TASK-004"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/capability-scorer.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-007",
+      "phase": "1.1",
+      "title": "Agent身份体系—Ed25519+JWT+Fingerprint",
+      "description": "Web Crypto API生成密钥对→SHA-256 fingerprint→JWT签名/验证→identicon SVG。参考agent-kanban。",
+      "passes": true,
+      "acceptance_criteria": [
+        "密钥对生成成功",
+        "fingerprint 16字符hex",
+        "identicon SVG生成",
+        "JWT签名+验证来回"
+      ],
+      "steps": [
+        "创建agent-identity.ts",
+        "实现Ed25519生成(Web Crypto)",
+        "实现fingerprint派生(SHA-256)",
+        "实现JWT签名/验证(jose)",
+        "实现identicon生成",
+        "编写单元测试"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/agent-identity.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-008",
+      "phase": "1.1",
+      "title": "会话状态机—SessionEvent+classifyIteratorEnd",
+      "description": "idle→working→in_review→completing→done。含rate_limited/suspended/blocked。参考agent-kanban。",
+      "passes": true,
+      "acceptance_criteria": [
+        "classifyIteratorEnd返回正确事件",
+        "applyEvent状态转换正确",
+        "非法转换抛出明确错误",
+        "rate_limited记录resetAt",
+        "状态持久化到DB"
+      ],
+      "steps": [
+        "创建session-state.ts",
+        "定义SessionStatus枚举+SessionEvent",
+        "实现classifyIteratorEnd",
+        "实现状态转换表",
+        "实现applyEvent",
+        "编写所有转换路径测试"
+      ],
+      "dependencies": [
+        "TASK-002"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/session-state.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-009",
+      "phase": "1.1",
+      "title": "RuntimePool并发池",
+      "description": "spawnAgent/killTask/killAll。per-runtime计数+断路器+2h超时kill。Map<taskId,AgentProcess>。",
+      "passes": true,
+      "acceptance_criteria": [
+        "spawnAgent启动+注册",
+        "activeCountForRuntime正确",
+        "killTask+killAll生效",
+        "2h超时自动kill",
+        "hasTask去重防重复派发"
+      ],
+      "steps": [
+        "创建runtime-pool.ts",
+        "实现AgentProcess接口+Map存储",
+        "实现spawnAgent+超时定时器",
+        "实现killTask/killAll",
+        "实现事件循环(AsyncGenerator消费)"
+      ],
+      "dependencies": [
+        "TASK-008"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/runtime-pool.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-010",
+      "phase": "1.1",
+      "title": "速率限制管理器+断路器",
+      "description": "RateLimiter(per-runtime暂停/恢复+resetAt持久化)。RuntimeCircuitBreaker(连续失败3次→暂停5分钟→半开→全开)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "isRuntimePaused在resetAt前true",
+        "onRateLimited更新内存+持久化",
+        "断路器状态转换:关→开→半开→关",
+        "连续成功后半开→全开"
+      ],
+      "steps": [
+        "创建rate-limiter.ts",
+        "创建circuit-breaker.ts",
+        "实现暂停/恢复/重置逻辑",
+        "编写状态转换测试"
+      ],
+      "dependencies": [
+        "TASK-009"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/rate-limiter.ts",
+        "packages/server/src/engine/circuit-breaker.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-011",
+      "phase": "1.1",
+      "title": "Orchestrator总指挥调度器",
+      "description": "复杂度分析→评分(1-10)→决定并行数。Plan-Execute-Observe循环。assignmentCycle每5秒。",
+      "passes": true,
+      "acceptance_criteria": [
+        "estimateComplexity返回1-10评分",
+        "decideParallelism返回建议数",
+        "assignmentCycle扫描pending→分配",
+        "selectBestAgent使用能力评分路由",
+        "submitResult处理PASS/FAIL"
+      ],
+      "steps": [
+        "创建orchestrator.ts",
+        "实现estimateComplexity(关键词分析)",
+        "实现assignmentCycle(定时扫描)",
+        "实现selectBestAgent",
+        "实现submitResult+打回逻辑"
+      ],
+      "dependencies": [
+        "TASK-006",
+        "TASK-009"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/orchestrator.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-012",
+      "phase": "1.1",
+      "title": "Hono HTTP服务器+路由+中间件",
+      "description": "端口5120。全局错误处理+CORS+Zod校验中间件。所有路由组注册。",
+      "passes": true,
+      "acceptance_criteria": [
+        "监听5120",
+        "GET /api/health返回{status:ok}",
+        "CORS允许localhost:5173",
+        "Zod校验失败返回400+中文消息",
+        "未捕获异常返回500"
+      ],
+      "steps": [
+        "创建index.ts入口",
+        "创建routes/index.ts",
+        "创建middleware/error.ts",
+        "创建middleware/cors.ts",
+        "创建middleware/validate.ts",
+        "验证curl localhost:5120/api/health"
+      ],
+      "dependencies": [
+        "TASK-002"
+      ],
+      "critical_files": [
+        "packages/server/src/index.ts",
+        "packages/server/src/routes/index.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-013",
+      "phase": "1.1",
+      "title": "REST API—Projects CRUD",
+      "description": "5端点。创建时初始化CLAUDE.md+agents/+SQLite。删除级联清理。",
+      "passes": true,
+      "acceptance_criteria": [
+        "POST创建成功",
+        "GET列表+详情",
+        "PATCH更新配置",
+        "DELETE级联删除所有关联"
+      ],
+      "steps": [
+        "创建routes/projects.ts",
+        "实现GET/POST",
+        "实现GET/:id/PATCH/:id/DELETE/:id",
+        "实现级联删除逻辑",
+        "编写API测试"
+      ],
+      "dependencies": [
+        "TASK-003",
+        "TASK-012"
+      ],
+      "critical_files": [
+        "packages/server/src/routes/projects.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-014",
+      "phase": "1.1",
+      "title": "REST API—Agents CRUD+注册",
+      "description": "10端点。注册时生成Ed25519密钥对+JWT。删除时清理worktree。",
+      "passes": true,
+      "acceptance_criteria": [
+        "POST注册生成密钥对",
+        "GET列表支持?status=&role=&projectId=",
+        "PATCH更新",
+        "POST心跳更新last_heartbeat",
+        "DELETE清理worktree"
+      ],
+      "steps": [
+        "创建routes/agents.ts",
+        "实现注册(含密钥对生成)",
+        "实现CRUD+心跳端点",
+        "实现启动/停止/暂停/恢复/重启",
+        "编写API测试"
+      ],
+      "dependencies": [
+        "TASK-007",
+        "TASK-012"
+      ],
+      "critical_files": [
+        "packages/server/src/routes/agents.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-015",
+      "phase": "1.1",
+      "title": "REST API—Tasks CRUD+分配+状态流转",
+      "description": "8端点。乐观锁version。状态流转校验合法转换矩阵。",
+      "passes": true,
+      "acceptance_criteria": [
+        "POST创建(可选dependsOn)",
+        "PATCH乐观锁(version不一致→409)",
+        "POST assign→InDev",
+        "POST status校验合法转换",
+        "GET支持多维过滤"
+      ],
+      "steps": [
+        "创建routes/tasks.ts",
+        "实现GET/POST含依赖",
+        "实现PATCH乐观锁",
+        "实现assign/unassign",
+        "实现status流转",
+        "编写乐观锁测试"
+      ],
+      "dependencies": [
+        "TASK-005",
+        "TASK-012"
+      ],
+      "critical_files": [
+        "packages/server/src/routes/tasks.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-016",
+      "phase": "1.1",
+      "title": "REST API—Board+Monitor+System",
+      "description": "看板7列/统计/stats/costs/health/detect/kill-switch。",
+      "passes": true,
+      "acceptance_criteria": [
+        "GET /api/board返回7列视图",
+        "stats返回total+byStatus+blockedTasks",
+        "costs支持?from=&to=过滤",
+        "detect返回CLI列表+版本+鉴权",
+        "kill-switch杀死所有进程树"
+      ],
+      "steps": [
+        "创建routes/board.ts",
+        "创建routes/monitor.ts",
+        "创建routes/system.ts",
+        "实现detect(spawn --version检测)",
+        "实现kill-switch(RuntimePool.killAll)"
+      ],
+      "dependencies": [
+        "TASK-009",
+        "TASK-014",
+        "TASK-015"
+      ],
+      "critical_files": [
+        "packages/server/src/routes/board.ts",
+        "packages/server/src/routes/monitor.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-017",
+      "phase": "1.1",
+      "title": "REST API—Workflow+Messages+ErrorLogs",
+      "description": "工作流(start/status/pause/resume)。消息(GET/POST/SSE广播)。错误日志(分页过滤)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "workflow端点全部可用",
+        "消息Pub/Sub正确",
+        "错误日志分页过滤",
+        "中文错误消息"
+      ],
+      "steps": [
+        "创建routes/workflows.ts",
+        "创建routes/messages.ts",
+        "创建routes/error-logs.ts",
+        "实现工作流持久化+消息SSE广播"
+      ],
+      "dependencies": [
+        "TASK-012",
+        "TASK-003"
+      ],
+      "critical_files": [
+        "packages/server/src/routes/workflows.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-018",
+      "phase": "1.1",
+      "title": "SSE多路复用事件推送",
+      "description": "GET /api/events?projectId=xxx。9种事件类型单连接推送。Hono stream()。EventBus广播模式。",
+      "passes": true,
+      "acceptance_criteria": [
+        "SSE Content-Type: text/event-stream",
+        "9种事件分帧推送",
+        "多客户端同时连接(广播)",
+        "客户端断开自动清理",
+        "每条事件含timestamp"
+      ],
+      "steps": [
+        "创建sse/event-bus.ts(事件总线)",
+        "创建sse/handler.ts(SSE处理器)",
+        "注册路由GET /api/events",
+        "实现subscribe/publish",
+        "测试多客户端+事件顺序"
+      ],
+      "dependencies": [
+        "TASK-012"
+      ],
+      "critical_files": [
+        "packages/server/src/sse/event-bus.ts",
+        "packages/server/src/sse/handler.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-019",
+      "phase": "1.1",
+      "title": "Claude Code SDK Provider",
+      "description": "@anthropic-ai/claude-agent-sdk。detect/spawn(SDK query())/parseOutput/getPricing。参考agent-kanban claude.ts。",
+      "passes": true,
+      "acceptance_criteria": [
+        "detect返回installed/version/authenticated",
+        "spawn返回AsyncIterable<AgentOutputEvent>",
+        "parseOutputLine映射所有7种事件",
+        "限流事件映射为rate_limit",
+        "getPricing返回三种模型定价"
+      ],
+      "steps": [
+        "创建providers/claude-code.ts",
+        "实现detect(spawn+读取credentials)",
+        "实现spawn(SDK query()调用)",
+        "实现parseOutputLine(完整映射)",
+        "实现getPricing",
+        "编写快照测试"
+      ],
+      "dependencies": [
+        "TASK-002"
+      ],
+      "critical_files": [
+        "packages/server/src/providers/claude-code.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-020",
+      "phase": "1.1",
+      "title": "Claude Code CLI降级通道",
+      "description": "child_process.spawn(claude -p --output-format stream-json)。SDK不可用时自动切换。",
+      "passes": true,
+      "acceptance_criteria": [
+        "spawn启动CLI进程+stream-json",
+        "stdout逐行JSON解析",
+        "stderr捕获为error",
+        "退出码映射completed",
+        "AbortController正确终止"
+      ],
+      "steps": [
+        "创建providers/claude-cli.ts",
+        "实现spawn(child_process.spawn)",
+        "实现流水线(lineStream→JSON→AgentOutputEvent)",
+        "实现abort处理",
+        "编写mock CLI集成测试"
+      ],
+      "dependencies": [
+        "TASK-019"
+      ],
+      "critical_files": [
+        "packages/server/src/providers/claude-cli.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-021",
+      "phase": "1.1",
+      "title": "Provider注册表+自动降级",
+      "description": "register→按优先级(SDK>CLI)→SDK detect不可用→自动选CLI fallback。",
+      "passes": true,
+      "acceptance_criteria": [
+        "register/getProvider/getAll",
+        "detectAll返回所有Provider检测",
+        "SDK不可用→自动fallback CLI",
+        "降级写入警告日志"
+      ],
+      "steps": [
+        "创建providers/registry.ts",
+        "实现register/getProvider/getAll/detectAll",
+        "实现自动降级逻辑(try SDK→catch→CLI)",
+        "编写降级测试"
+      ],
+      "dependencies": [
+        "TASK-019",
+        "TASK-020"
+      ],
+      "critical_files": [
+        "packages/server/src/providers/registry.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-022",
+      "phase": "1.1",
+      "title": "Agent Runner—启动/停止/暂停/心跳/恢复",
+      "description": "Provider.spawn→注册RuntimePool→消费事件流(SSE推送)→崩溃恢复(指数退避1s→2s→4s,3次)→心跳30s。",
+      "passes": true,
+      "acceptance_criteria": [
+        "start通过Provider.spawn启动+注册",
+        "stop发送AbortController.abort",
+        "pause SIGSTOP/resume SIGCONT",
+        "崩溃自动重启(指数退避3次)→标记error",
+        "心跳30s无响应→offline→释放任务"
+      ],
+      "steps": [
+        "创建agent-runner.ts",
+        "实现start(provider.spawn+pool.spawnAgent)",
+        "实现stop/pause/resume",
+        "实现崩溃恢复(指数退避)",
+        "实现心跳监控(30s定时检查)",
+        "与RuntimePool集成测试"
+      ],
+      "dependencies": [
+        "TASK-009",
+        "TASK-010",
+        "TASK-021"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/agent-runner.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-023",
+      "phase": "1.1",
+      "title": "Git Worktree自动化管理",
+      "description": "createWorktree(git worktree add --detach)/symlink node_modules/cleanup(30天+git status干净)。参考kanbots。",
+      "passes": true,
+      "acceptance_criteria": [
+        "创建独立worktree到.claude/worktrees/",
+        "symlink node_modules主仓库",
+        "stale worktree清理(30天+干净)",
+        "Windows mklink /J适配",
+        "创建失败不阻塞(降级同目录)"
+      ],
+      "steps": [
+        "创建worktree-manager.ts",
+        "实现createWorktree(git worktree add)",
+        "实现symlinkNodeModules(平台适配)",
+        "实现cleanupStaleWorktrees",
+        "实现pre-push hook阻止Agent push"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/worktree-manager.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-024",
+      "phase": "1.1",
+      "title": "成本追踪引擎CostTracker",
+      "description": "解析AgentOutputEvent.cost事件→写入cost_events表→按Agent/任务/项目/模型聚合→SSE推送。",
+      "passes": true,
+      "acceptance_criteria": [
+        "cost事件→DB写入",
+        "按项目/Agent/任务/模型聚合",
+        "SSE实时推送cost-update",
+        "金额计算精度正确"
+      ],
+      "steps": [
+        "创建cost-tracker.ts",
+        "实现cost事件处理器",
+        "实现聚合查询(getTotalCost等)",
+        "实现SSE推送",
+        "编写精度测试"
+      ],
+      "dependencies": [
+        "TASK-003",
+        "TASK-018"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/cost-tracker.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-025",
+      "phase": "1.1",
+      "title": "Kill Switch—6层紧急停止",
+      "description": "内存标志→进程树kill(负PID)→worktree保留→任务释放→桌面通知→Webhook。参考AgentManager。",
+      "passes": true,
+      "acceptance_criteria": [
+        "POST /api/kill-switch设置isKilled",
+        "RuntimePool.killAll遍历所有Agent",
+        "进程树清理(process.kill(-pid)或taskkill /T)",
+        "已杀死任务→Cancelled",
+        "桌面通知+Webhook推送"
+      ],
+      "steps": [
+        "创建kill-switch.ts",
+        "实现activate/deactivate内存标志",
+        "实现killAll(RuntimePool+进程树)",
+        "实现通知(Webhook)",
+        "编写Kill Switch测试"
+      ],
+      "dependencies": [
+        "TASK-009"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/kill-switch.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-026",
+      "phase": "1.2",
+      "title": "React脚手架—Vite+Tailwind+shadcn/ui",
+      "description": "React19+Vite7+Tailwind4。shadcn/ui组件库。dark:暗色。Geist+Geist Mono字体。",
+      "passes": true,
+      "acceptance_criteria": [
+        "npm run dev启动",
+        "shadcn/ui Button/Card/Badge渲染",
+        "dark:暗色切换生效",
+        "Geist字体加载"
+      ],
+      "steps": [
+        "创建packages/web",
+        "安装shadcn/ui初始化",
+        "配置Tailwind暗色",
+        "配置Geist字体",
+        "配置API代理localhost:5120",
+        "验证npm run dev"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "critical_files": [
+        "packages/web/vite.config.ts",
+        "packages/web/tailwind.config.ts",
+        "packages/web/src/app.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-027",
+      "phase": "1.2",
+      "title": "看板主视图—7列+卡片渲染",
+      "description": "7列+卡片(标题/描述/指派人色标/状态/耗时/重试次数)。@dnd-kit拖拽。Agent cyan发光。",
+      "passes": true,
+      "acceptance_criteria": [
+        "7列渲染正确",
+        "卡片信息完整",
+        "拖拽触发API调用",
+        "非法拖拽回弹+toast",
+        "Agent cyan glow动画"
+      ],
+      "steps": [
+        "创建Board/Column/Card组件",
+        "集成@dnd-kit(DndContext+useDraggable+useDroppable)",
+        "实现拖拽→API→乐观更新",
+        "实现非法转换回弹+错误提示"
+      ],
+      "dependencies": [
+        "TASK-015",
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/web/src/components/kanban/Board.tsx",
+        "packages/web/src/components/kanban/Column.tsx",
+        "packages/web/src/components/kanban/Card.tsx"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-028",
+      "phase": "1.2",
+      "title": "Agent状态面板—色环+Identicon",
+      "description": "右侧面板：identicon+色环(🟢🟡🔴⚫⏸)+当前任务+cyan呼吸动画。SSE实时更新。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Agent列表渲染",
+        "identicon SVG",
+        "busy呼吸动画(2s opacity cycle)",
+        "SSE agent-status→实时更新",
+        "点击跳转对应任务"
+      ],
+      "steps": [
+        "创建AgentPanel/AgentItem组件",
+        "创建identicon渲染组件",
+        "实现SSE EventSource连接",
+        "实现呼吸动画(CSS animation)"
+      ],
+      "dependencies": [
+        "TASK-014",
+        "TASK-018",
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/web/src/components/agents/AgentPanel.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-029",
+      "phase": "1.2",
+      "title": "终端输出面板—xterm.js+Agent Tab",
+      "description": "底部终端：xterm.js渲染，按Agent分Tab。SSE agent-output→逐行追加。Geist Mono。",
+      "passes": true,
+      "acceptance_criteria": [
+        "xterm.js渲染",
+        "Agent Tab切换",
+        "SSE实时追加stdout/stderr",
+        "stderr红色",
+        "Geist Mono字体"
+      ],
+      "steps": [
+        "创建TerminalPanel组件",
+        "安装xterm.js+@xterm/addon-fit",
+        "实现Agent Tab切换",
+        "实现SSE→xterm.write()逐行输出",
+        "配置Geist Mono+cyan Agent边框"
+      ],
+      "dependencies": [
+        "TASK-018",
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/web/src/components/terminal/TerminalPanel.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-030",
+      "phase": "1.2",
+      "title": "路由+导航+暗色切换",
+      "description": "5路由(/,/projects,/projects/:id,/agents,/monitor)。顶部栏(项目选择/成本/暗色切换)。URL状态。",
+      "passes": true,
+      "acceptance_criteria": [
+        "5个路由可用",
+        "项目选择器dropdown切换",
+        "成本实时显示右上角",
+        "暗色切换(localStorage持久化)",
+        "URL参数编码(?session=&view=)"
+      ],
+      "steps": [
+        "创建App.tsx+router",
+        "创建Navbar组件",
+        "实现项目选择器(GET /api/projects)",
+        "实现暗色切换(Tailwind dark: + localStorage)",
+        "实现URL状态同步(useSearchParams)"
+      ],
+      "dependencies": [
+        "TASK-013",
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/web/src/App.tsx",
+        "packages/web/src/components/layout/Navbar.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-031",
+      "phase": "1.2",
+      "title": "任务创建/编辑弹窗",
+      "description": "①表单模式(React Hook Form+Zod)②YAML模式(语法高亮)。能力标签选择+任务依赖搜索。",
+      "passes": true,
+      "acceptance_criteria": [
+        "表单模式可用",
+        "YAML模式可用",
+        "能力标签multi-select搜索",
+        "依赖任务combobox搜索",
+        "提交→卡片出现Backlog"
+      ],
+      "steps": [
+        "创建TaskCreateModal",
+        "实现表单模式",
+        "实现YAML模式(textarea+语法高亮)",
+        "实现能力标签选择器",
+        "实现任务依赖选择器"
+      ],
+      "dependencies": [
+        "TASK-015",
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/web/src/components/tasks/TaskCreateModal.tsx"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-032",
+      "phase": "1.2",
+      "title": "任务卡片详情面板Slide-out",
+      "description": "shadcn/ui Sheet滑出：完整描述/DAG图(reactflow)/Agent对话时间线/文件diff/QA报告/操作按钮。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Sheet滑出动画(250-400ms)",
+        "DAG依赖可视化",
+        "对话时间线渲染",
+        "操作按钮(分配/重试/取消)",
+        "报告链接(安全/审查/QA)"
+      ],
+      "steps": [
+        "创建TaskDetailSheet",
+        "实现Sheet滑出(shadcn/ui)",
+        "实现DAG可视化(reactflow或纯SVG)",
+        "实现对话历史列表",
+        "实现操作按钮(API+乐观更新)"
+      ],
+      "dependencies": [
+        "TASK-015",
+        "TASK-027"
+      ],
+      "critical_files": [
+        "packages/web/src/components/tasks/TaskDetailSheet.tsx"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-033",
+      "phase": "1.2",
+      "title": "看板筛选+搜索+批量操作",
+      "description": "筛选(状态/Agent/优先级)+搜索(模糊匹配debounce300ms)+批量(全选→删除已完成)。键盘1-7快捷键。",
+      "passes": true,
+      "acceptance_criteria": [
+        "状态筛选checkbox多选",
+        "Agent筛选dropdown",
+        "搜索debounce模糊匹配",
+        "批量删除(确认弹窗)",
+        "键盘1-7快速切列筛选"
+      ],
+      "steps": [
+        "创建FilterBar组件",
+        "实现多维筛选",
+        "实现搜索(useDeferredValue+fuzzy)",
+        "实现批量操作(全选+删除)",
+        "实现键盘快捷键"
+      ],
+      "dependencies": [
+        "TASK-027"
+      ],
+      "critical_files": [
+        "packages/web/src/components/kanban/FilterBar.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-034",
+      "phase": "1.2",
+      "title": "Token/成本面板+速率限制指示器",
+      "description": "Recharts折线图/Token进度条(三色)/速率限制指示器(正常/暂停/超限)。SSE实时刷新。",
+      "passes": true,
+      "acceptance_criteria": [
+        "成本折线图(按项目/Agent切换)",
+        "Token进度条(绿<70%/黄70-85%/红>85%)",
+        "速率限制指示器",
+        "SSE cost-update→实时"
+      ],
+      "steps": [
+        "创建CostChart/TokenBar/RateLimitIndicator",
+        "创建Monitor页面",
+        "集成Recharts",
+        "集成SSE"
+      ],
+      "dependencies": [
+        "TASK-018",
+        "TASK-024",
+        "TASK-030"
+      ],
+      "critical_files": [
+        "packages/web/src/components/monitor/CostChart.tsx",
+        "packages/web/src/pages/Monitor.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-035",
+      "phase": "1.2",
+      "title": "项目管理页面",
+      "description": "项目列表+创建弹窗(名称/路径/文件夹选择)+配置(CLAUDE.md编辑器/Agent团队勾选)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "项目列表显示",
+        "创建弹窗+文件夹选择器",
+        "配置页面",
+        "删除弹窗+确认"
+      ],
+      "steps": [
+        "创建Projects页面",
+        "创建ProjectCreateModal",
+        "创建ProjectConfig",
+        "实现文件夹选择器(showDirectoryPicker)"
+      ],
+      "dependencies": [
+        "TASK-013",
+        "TASK-030"
+      ],
+      "critical_files": [
+        "packages/web/src/pages/Projects.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-036",
+      "phase": "1.2",
+      "title": "aswarm CLI—kubectl风格命令框架",
+      "description": "commander.js。get/create/update/delete/describe子命令。-o json|yaml|wide输出。apply -f YAML。",
+      "passes": true,
+      "acceptance_criteria": [
+        "aswarm get agents表格",
+        "create task创建",
+        "apply -f声明式",
+        "-o json输出JSON"
+      ],
+      "steps": [
+        "创建packages/cli",
+        "实现get/create/update/delete命令",
+        "实现apply -f(YAML解析)",
+        "实现输出格式化(table/json/yaml)"
+      ],
+      "dependencies": [
+        "TASK-014",
+        "TASK-015"
+      ],
+      "critical_files": [
+        "packages/cli/src/index.ts",
+        "packages/cli/src/commands/get.ts",
+        "packages/cli/src/commands/apply.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-037",
+      "phase": "1.2",
+      "title": "aswarm CLI—start/stop/doctor/detect/identity",
+      "description": "start(启动+自动开浏览器)/stop(SIGTERM)/doctor(环境诊断)/detect(CLI检测)/identity(create/whoami)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "start启动+开浏览器",
+        "stop发送SIGTERM",
+        "doctor输出版本+鉴权",
+        "detect输出CLI表格",
+        "identity生成密钥对"
+      ],
+      "steps": [
+        "创建start/stop/doctor/detect/identity命令",
+        "实现服务器启动(spawn+wait)",
+        "实现环境诊断(spawn --version)",
+        "实现身份管理"
+      ],
+      "dependencies": [
+        "TASK-025",
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/start.ts",
+        "packages/cli/src/commands/doctor.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-038",
+      "phase": "1.2",
+      "title": "aswarm init—项目初始化+Agent安装",
+      "description": "init：创建.agents/+安装12Agent.md/+生成CLAUDE.md/git init/SQLite初始化。",
+      "passes": true,
+      "acceptance_criteria": [
+        "创建.agents/目录",
+        "安装12个Agent定义",
+        "生成CLAUDE.md",
+        "git init检测+初始化",
+        "SQLite数据库创建"
+      ],
+      "steps": [
+        "创建init.ts",
+        "实现Agent定义安装(内置模板复制)",
+        "实现CLAUDE.md生成(模板+输入)",
+        "实现git init检测",
+        "实现SQLite创建"
+      ],
+      "dependencies": [
+        "TASK-003",
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/init.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-039",
+      "phase": "1.2",
+      "title": "一键安装脚本+平台适配",
+      "description": "macOS(curl bash)/Linux/Win(PowerShell irm)/npm全局。自动检测+安装缺失依赖。",
+      "passes": true,
+      "acceptance_criteria": [
+        "macOS curl bash",
+        "Windows irm iex",
+        "npm i -g",
+        "自动检测Node>=22",
+        "自动检测Git"
+      ],
+      "steps": [
+        "编写install.sh(macOS/Linux)",
+        "编写install.ps1(Windows)",
+        "编写npm安装脚本",
+        "实现Node版本检测",
+        "实现Git检测"
+      ],
+      "dependencies": [
+        "TASK-036"
+      ],
+      "critical_files": [
+        "scripts/install.sh",
+        "scripts/install.ps1"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-040",
+      "phase": "1.2",
+      "title": "Agent自动发现—~/.claude/扫描+导入",
+      "description": "扫描~/.claude/projects/→发现已有会话→提取项目信息→看板导入→解析TodoWrite。参考claude-code-kanban。",
+      "passes": true,
+      "acceptance_criteria": [
+        "aswarm detect列出项目",
+        "导入按钮",
+        "自动创建tasks(TodoWrite解析)",
+        "只读模式防冲突"
+      ],
+      "steps": [
+        "创建session-scanner.ts",
+        "实现~/.claude/扫描",
+        "实现TodoWrite JSONL解析",
+        "实现导入API",
+        "实现导入按钮UI"
+      ],
+      "dependencies": [
+        "TASK-013"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/session-scanner.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-041",
+      "phase": "1.2",
+      "title": "Agent鉴权状态实时检查",
+      "description": "启动时检查所有已注册Agent的CLI鉴权状态。未登录→红色警告+一键登录引导。",
+      "passes": true,
+      "acceptance_criteria": [
+        "启动时自动检查",
+        "未登录红色警告",
+        "一键登录引导",
+        "状态持久化"
+      ],
+      "steps": [
+        "创建auth-checker.ts",
+        "实现CLI auth检查(spawn --version+auth)",
+        "实现UI警告组件",
+        "实现登录引导"
+      ],
+      "dependencies": [
+        "TASK-021"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/auth-checker.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-042",
+      "phase": "1.2",
+      "title": "Job预算控制—$/任务",
+      "description": "每任务$预算上限(spawnConfig.maxBudgetUsd)。SDK自动追踪→超预算自动停止+通知。默认$5。参考cc-agent。",
+      "passes": true,
+      "acceptance_criteria": [
+        "$5默认预算",
+        "超预算自动停止",
+        "预算可配置(创建任务时)",
+        "超预算通知toast"
+      ],
+      "steps": [
+        "在AgentRunner中实现预算检查",
+        "实现cost事件累计→超限判断",
+        "实现超限→kill Agent→通知"
+      ],
+      "dependencies": [
+        "TASK-022",
+        "TASK-024"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/agent-runner.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-043",
+      "phase": "1.2",
+      "title": "看板卡片列内优先级拖拽排序",
+      "description": "列内拖拽排序。priority字段同步。localStorage持久化。拖拽动画60fps。",
+      "passes": true,
+      "acceptance_criteria": [
+        "列内拖拽排序",
+        "排序持久化",
+        "priority同步",
+        "动画流畅60fps"
+      ],
+      "steps": [
+        "在Board组件实现列内排序",
+        "实现排序持久化(localStorage+API)",
+        "实现priority同步",
+        "实现排序动画"
+      ],
+      "dependencies": [
+        "TASK-027"
+      ],
+      "critical_files": [
+        "packages/web/src/components/kanban/Board.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-044",
+      "phase": "1.2",
+      "title": "看板导出PNG/PDF",
+      "description": "导出→html2canvas截图→下载PNG/PDF。完整看板视图。中文渲染正确。",
+      "passes": true,
+      "acceptance_criteria": [
+        "导出PNG",
+        "导出PDF",
+        "看板完整截图",
+        "中文渲染正确"
+      ],
+      "steps": [
+        "安装html2canvas+jspdf",
+        "实现导出按钮",
+        "实现截图逻辑",
+        "实现下载"
+      ],
+      "dependencies": [
+        "TASK-027"
+      ],
+      "critical_files": [
+        "packages/web/src/components/kanban/ExportButton.tsx"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-045",
+      "phase": "1.2",
+      "title": "任务模板系统",
+      "description": "预定义模板(bug修复/新功能/重构/文档/部署)。创建任务时可选模板快速填充。用户自定义模板CRUD。",
+      "passes": true,
+      "acceptance_criteria": [
+        "5+预定义模板",
+        "模板选择器",
+        "模板含默认标签+优先级",
+        "用户自定义模板"
+      ],
+      "steps": [
+        "创建templates.json",
+        "实现模板选择器UI",
+        "实现模板填充",
+        "实现自定义模板CRUD"
+      ],
+      "dependencies": [
+        "TASK-031"
+      ],
+      "critical_files": [
+        "packages/web/src/components/tasks/TaskTemplates.tsx"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-046",
+      "phase": "1.2",
+      "title": "全局并发上限可视化+排队队列",
+      "description": "并发进度条(5/10活跃→排队3)。超出自动排队→资源释放自动派发。队列可拖拽调整顺序。",
+      "passes": true,
+      "acceptance_criteria": [
+        "并发进度条",
+        "排队队列可视化",
+        "自动排队+派发",
+        "队列顺序可调整"
+      ],
+      "steps": [
+        "创建ConcurrencyBar组件",
+        "实现排队逻辑(Orchestrator)",
+        "实现队列UI",
+        "实现队列调整(拖拽)"
+      ],
+      "dependencies": [
+        "TASK-009",
+        "TASK-011"
+      ],
+      "critical_files": [
+        "packages/web/src/components/agents/ConcurrencyBar.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-047",
+      "phase": "2.1",
+      "title": "卡片详情—Agent对话历史+文件diff",
+      "description": "时间线(messages表)+tool_use展开+git diff高亮。翻页加载。参考claude-code-kanban。",
+      "passes": true,
+      "acceptance_criteria": [
+        "时间线渲染对话",
+        "tool_use展开",
+        "git diff高亮",
+        "翻页加载(intersection observer)"
+      ],
+      "steps": [
+        "创建AgentTimeline组件",
+        "实现时间线渲染",
+        "实现tool_use展开",
+        "实现diff渲染(diff2html)",
+        "实现翻页加载"
+      ],
+      "dependencies": [
+        "TASK-017",
+        "TASK-032"
+      ],
+      "critical_files": [
+        "packages/web/src/components/tasks/AgentTimeline.tsx"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-048",
+      "phase": "2.1",
+      "title": "看板多项目并行视图",
+      "description": "多项目Tab切换。独立SQLite数据隔离。Tab拖拽排序。3+项目不卡顿。",
+      "passes": true,
+      "acceptance_criteria": [
+        "多项目Tab切换",
+        "Tab显示统计",
+        "数据完全隔离",
+        "Tab拖拽排序",
+        "3+项目不卡顿"
+      ],
+      "steps": [
+        "创建ProjectTabs",
+        "实现Tab切换(nested routes)",
+        "实现拖拽排序(dnd-kit)",
+        "实现按需加载(react-query key)",
+        "实现内存限制(最多同时渲染3个)"
+      ],
+      "dependencies": [
+        "TASK-013",
+        "TASK-027"
+      ],
+      "critical_files": [
+        "packages/web/src/components/layout/ProjectTabs.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-049",
+      "phase": "2.1",
+      "title": "Hermes Provider",
+      "description": "hermes -p --output-format stream-json。detect/spawn/parseOutput。注册到ProviderRegistry。",
+      "passes": true,
+      "acceptance_criteria": [
+        "detect三字段",
+        "spawn启动进程",
+        "parseOutput解析事件",
+        "不支持时明确错误"
+      ],
+      "steps": [
+        "创建providers/hermes.ts",
+        "实现detect/spawn/parseOutput",
+        "编写快照测试"
+      ],
+      "dependencies": [
+        "TASK-021"
+      ],
+      "critical_files": [
+        "packages/server/src/providers/hermes.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-050",
+      "phase": "2.1",
+      "title": "OpenClaw Provider",
+      "description": "openclaw -p --output-format stream-json。同Hermes结构。注册到ProviderRegistry。",
+      "passes": true,
+      "acceptance_criteria": [
+        "同Hermes标准",
+        "注册到Registry"
+      ],
+      "steps": [
+        "创建providers/openclaw.ts"
+      ],
+      "dependencies": [
+        "TASK-042"
+      ],
+      "critical_files": [
+        "packages/server/src/providers/openclaw.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-051",
+      "phase": "2.1",
+      "title": "Agent批量操作—全选启停暂停",
+      "description": "Agent面板全选→一键启动/停止/暂停/恢复。Promise.allSettled+结果汇总toast。",
+      "passes": true,
+      "acceptance_criteria": [
+        "全选checkbox",
+        "批量启动",
+        "批量停止/暂停/恢复",
+        "结果汇总toast(3/5成功,2失败)"
+      ],
+      "steps": [
+        "添加批量工具栏到AgentPanel",
+        "实现全选逻辑",
+        "实现批量API调用",
+        "实现结果汇总"
+      ],
+      "dependencies": [
+        "TASK-028"
+      ],
+      "critical_files": [
+        "packages/web/src/components/agents/AgentPanel.tsx"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-052",
+      "phase": "2.1",
+      "title": "数据清理+过期Worktree GC",
+      "description": "POST /api/cleanup清理90天cost_events/stale worktree(30天+干净)/旧error_events(90天)。node-cron凌晨3点。",
+      "passes": true,
+      "acceptance_criteria": [
+        "POST立即清理",
+        "cost 90天删除",
+        "stale worktree清理",
+        "error 90天删除",
+        "node-cron定时",
+        "清理日志"
+      ],
+      "steps": [
+        "创建cleanup.ts",
+        "实现cost/worktree/error清理",
+        "实现node-cron定时",
+        "创建cleanup API"
+      ],
+      "dependencies": [
+        "TASK-003",
+        "TASK-023"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/cleanup.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-053",
+      "phase": "2.1",
+      "title": "aswarm cleanup CLI",
+      "description": "aswarm cleanup：POST /api/cleanup+显示摘要。--dry-run只显示不删除。",
+      "passes": true,
+      "acceptance_criteria": [
+        "cleanup执行+结果",
+        "--dry-run模式",
+        "清理摘要表格",
+        "失败错误详情"
+      ],
+      "steps": [
+        "创建cleanup.ts CLI",
+        "实现API调用+展示",
+        "实现--dry-run",
+        "实现格式化输出"
+      ],
+      "dependencies": [
+        "TASK-036",
+        "TASK-045"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/cleanup.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-054",
+      "phase": "2.1",
+      "title": "aswarm identity create/whoami/verify",
+      "description": "identity：create(生成keypair+fingerprint)→whoami(显示身份)→verify(验证签名)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "create生成",
+        "whoami显示",
+        "verify验证",
+        "格式化输出"
+      ],
+      "steps": [
+        "创建identity.ts(增强)",
+        "实现create/whoami/verify",
+        "实现格式化输出"
+      ],
+      "dependencies": [
+        "TASK-007",
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/identity.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-055",
+      "phase": "2.1",
+      "title": "aswarm config view/set",
+      "description": "config：view(查看配置)/set api-url/port/max-agents(修改)。持久化~/.agent-swarm/config.json。Zod校验。",
+      "passes": true,
+      "acceptance_criteria": [
+        "view显示配置",
+        "set修改+持久化",
+        "Zod校验",
+        "中文错误提示"
+      ],
+      "steps": [
+        "创建config.ts CLI",
+        "实现view/set",
+        "实现配置持久化(Zod)"
+      ],
+      "dependencies": [
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/config.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-056",
+      "phase": "2.1",
+      "title": "aswarm reload—Agent定义热重载",
+      "description": "修改Agent .md→aswarm reload→重新加载所有定义→不影响运行中Agent(仅新spawn用新定义)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "reload重新加载",
+        "Web UI刷新按钮",
+        "不影响运行中",
+        "失败→保留旧定义+提示"
+      ],
+      "steps": [
+        "创建reload命令",
+        "实现Agent定义重新加载",
+        "实现Web UI刷新按钮"
+      ],
+      "dependencies": [
+        "TASK-038"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/reload.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-057",
+      "phase": "2.1",
+      "title": "Skill热重载—工作流剧本热更新",
+      "description": "修改SKILL.md→chokidar自动检测→重新加载Skill→运行中工作流不受影响(新工作流用新Skill)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "chokidar监听变更",
+        "自动重新加载",
+        "不影响运行中",
+        "重载日志"
+      ],
+      "steps": [
+        "实现文件监听(chokidar)",
+        "实现Skill自动重载",
+        "实现重载日志"
+      ],
+      "dependencies": [
+        "TASK-047"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/workflow-engine.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-058",
+      "phase": "2.1",
+      "title": "看板统计面板增强",
+      "description": "看板顶部统计栏增加：今日完成任务/本周完成任务/平均任务耗时/Agent 利用率(A/B test)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "今日完成数",
+        "本周完成数",
+        "平均耗时",
+        "Agent利用率",
+        "SSE实时更新"
+      ],
+      "steps": [
+        "增强BoardStats组件",
+        "实现时间聚合查询",
+        "实现利用率计算",
+        "SSE集成"
+      ],
+      "dependencies": [
+        "TASK-027",
+        "TASK-034"
+      ],
+      "critical_files": [
+        "packages/web/src/components/kanban/BoardStats.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-059",
+      "phase": "2.1",
+      "title": "错误重试策略配置面板",
+      "description": "Web UI配置页面：工具级/任务级/系统级重试策略可调(maxRetries/backoff/timeout)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "重试策略配置表单",
+        "工具/任务/系统三级",
+        "配置持久化",
+        "即时生效"
+      ],
+      "steps": [
+        "创建RetryConfigPanel",
+        "实现配置表单",
+        "实现API持久化",
+        "实现即时生效(无需重启)"
+      ],
+      "dependencies": [
+        "TASK-016"
+      ],
+      "critical_files": [
+        "packages/web/src/components/settings/RetryConfigPanel.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-060",
+      "phase": "2.1",
+      "title": "Agent角色自定义编辑器",
+      "description": "Web UI Agent定义编辑器：Markdown编辑+实时预览+保存→aswarm reload。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Agent定义编辑器",
+        "Markdown预览",
+        "保存触发reload",
+        "格式校验"
+      ],
+      "steps": [
+        "创建AgentEditor",
+        "实现Markdown编辑器(CodeMirror)",
+        "实现实时预览",
+        "实现保存+reload"
+      ],
+      "dependencies": [
+        "TASK-038"
+      ],
+      "critical_files": [
+        "packages/web/src/components/agents/AgentEditor.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-061",
+      "phase": "2.1",
+      "title": "实时通知中心",
+      "description": "Web UI通知中心：通知列表(Phase完成/Agent崩溃/Blocked/超预算)+已读/未读+点击跳转。",
+      "passes": true,
+      "acceptance_criteria": [
+        "通知列表",
+        "已读/未读",
+        "点击跳转",
+        "自动清理30天"
+      ],
+      "steps": [
+        "创建NotificationCenter",
+        "实现通知列表渲染",
+        "实现已读标记",
+        "实现自动清理"
+      ],
+      "dependencies": [],
+      "critical_files": [
+        "packages/web/src/components/notifications/NotificationCenter.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-062",
+      "phase": "2.1",
+      "title": "系统设置页面",
+      "description": "设置页面：端口/并发上限/AI模型选择/权限模式/语言/暗色。所有配置持久化。",
+      "passes": true,
+      "acceptance_criteria": [
+        "端口设置",
+        "并发上限",
+        "模型选择",
+        "权限模式",
+        "语言"
+      ],
+      "steps": [
+        "创建Settings页面",
+        "实现配置表单",
+        "实现API持久化",
+        "实现即时生效"
+      ],
+      "dependencies": [
+        "TASK-013"
+      ],
+      "critical_files": [
+        "packages/web/src/pages/Settings.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-063",
+      "phase": "2.2",
+      "title": "Workflow Engine—Skill解析+Phase自动推进",
+      "description": "解析SKILL.md→构建Phase DAG→自动推进→检测并行Phase(2.5+4,5+6)→触发门禁。",
+      "passes": true,
+      "acceptance_criteria": [
+        "loadWorkflow加载SKILL.md",
+        "getNextPhase返回当前",
+        "detectParallelPhases识别可并行",
+        "Phase自动流转",
+        "持久化workflows表"
+      ],
+      "steps": [
+        "创建workflow-engine.ts",
+        "实现SKILL.md解析(Phase提取+依赖)",
+        "实现Phase DAG构建",
+        "实现自动推进+并行检测",
+        "编写集成测试"
+      ],
+      "dependencies": [
+        "TASK-011",
+        "TASK-017"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/workflow-engine.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-064",
+      "phase": "2.2",
+      "title": "内置standard-dev-team SKILL.md",
+      "description": "基于claude-standard-dev-team：11Phase+12角色+契约驱动+Dev-QA Loop+全自主门禁。",
+      "passes": true,
+      "acceptance_criteria": [
+        "完整11Phase定义",
+        "每个Phase:输入/输出/Agent/验证",
+        "全自主门禁规则",
+        "并行Phase标注",
+        "<500行"
+      ],
+      "steps": [
+        "创建SKILL.md",
+        "编写Phase 0-11详细定义",
+        "编写门禁规则表(6道防线)",
+        "编写并行标注",
+        "验证Workflow Engine加载解析"
+      ],
+      "dependencies": [
+        "TASK-047"
+      ],
+      "critical_files": [
+        "packages/cli/templates/skills/standard-team/SKILL.md"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-065",
+      "phase": "2.2",
+      "title": "内置规划层Agent定义—PM+架构师",
+      "description": "product-manager.md+software-architect.md。tools/model/systemPrompt。全中文<5KB。",
+      "passes": true,
+      "acceptance_criteria": [
+        "PM:范围保守/数据说话/假设透明",
+        "架构师:契约优先/字段穷举/Plan Mode探索",
+        "<5KB"
+      ],
+      "steps": [
+        "编写product-manager.md",
+        "编写software-architect.md",
+        "参考claude-standard-dev-team原文",
+        "翻译中文+添加Plan Mode"
+      ],
+      "dependencies": [
+        "TASK-048"
+      ],
+      "critical_files": [
+        "packages/cli/templates/agents/product-manager.md",
+        "packages/cli/templates/agents/software-architect.md"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-066",
+      "phase": "2.2",
+      "title": "内置实现层Agent定义—UI/DBA/后端/前端/DevOps(5个)",
+      "description": "5个实现Agent .md。正确tools权限。全中文。<5KB。",
+      "passes": true,
+      "acceptance_criteria": [
+        "5个文件存在",
+        "正确tools",
+        "backend:契约至上",
+        "frontend:禁硬编码",
+        "devops:部署路径检查"
+      ],
+      "steps": [
+        "编写5个Agent .md",
+        "参考claude-standard-dev-team",
+        "验证文件大小"
+      ],
+      "dependencies": [
+        "TASK-049"
+      ],
+      "critical_files": [
+        "packages/cli/templates/agents/"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-067",
+      "phase": "2.2",
+      "title": "内置质量层Agent定义—QA/安全/审查/验收(4个)",
+      "description": "4个质量Agent .md。含人格定义(vibe)。全中文。",
+      "passes": true,
+      "acceptance_criteria": [
+        "QA:证据偏执/默认找问题/0浏览器依赖",
+        "安全:OWASP+威胁建模",
+        "审查:正确性+可维护性+性能",
+        "验收:默认不信任/压倒性证据"
+      ],
+      "steps": [
+        "编写4个Agent .md",
+        "参考claude-standard-dev-team人格",
+        "验证文件大小"
+      ],
+      "dependencies": [
+        "TASK-049"
+      ],
+      "critical_files": [
+        "packages/cli/templates/agents/"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-068",
+      "phase": "2.2",
+      "title": "内置文档层Agent定义—technical-writer",
+      "description": "technical-writer.md：README+API文档。含必检查清单。",
+      "passes": true,
+      "acceptance_criteria": [
+        "technical-writer.md",
+        "含README必检查清单",
+        "含API_DOC生成指令",
+        "<5KB"
+      ],
+      "steps": [
+        "编写technical-writer.md",
+        "编写必检查清单"
+      ],
+      "dependencies": [
+        "TASK-049"
+      ],
+      "critical_files": [
+        "packages/cli/templates/agents/technical-writer.md"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-069",
+      "phase": "2.2",
+      "title": "Dev-QA Loop自动化—实现→验证→打回",
+      "description": "实现Agent完成→QA Agent验证→PASS流转/FAIL打回(3次)→Blocked。API硬编码零容忍检测。",
+      "passes": true,
+      "acceptance_criteria": [
+        "自动触发QA Agent",
+        "逐条验证API_CONTRACT",
+        "PASS/FAIL决策",
+        "打回+重试计数",
+        "API硬编码grep检测"
+      ],
+      "steps": [
+        "在Orchestrator实现Dev-QA Loop",
+        "实现QA Agent自动spawn(完成触发)",
+        "实现PASS/FAIL决策",
+        "实现打回+重试",
+        "实现API硬编码检测",
+        "编写集成测试"
+      ],
+      "dependencies": [
+        "TASK-011",
+        "TASK-022",
+        "TASK-047"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/orchestrator.ts",
+        "packages/server/src/engine/qa-loop.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-070",
+      "phase": "2.2",
+      "title": "全自主门禁—安全+审查自动化",
+      "description": "Phase7→security-engineer→高危打回(2次)→Blocked。Phase8→code-reviewer→MUST FIX打回(2次)→Blocked。",
+      "passes": true,
+      "acceptance_criteria": [
+        "安全门禁自动触发",
+        "审查门禁自动触发",
+        "自动打回+重试",
+        "Blocked+通知"
+      ],
+      "steps": [
+        "实现安全门禁",
+        "实现审查门禁",
+        "实现自动打回",
+        "实现Blocked通知"
+      ],
+      "dependencies": [
+        "TASK-053"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/workflow-engine.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-071",
+      "phase": "2.2",
+      "title": "全自主门禁—验收+部署",
+      "description": "Phase10→reality-checker→NEEDS WORK打回(1次)→Blocked。全通过→git push+PR+自动merge。Phase9→部署路径检查。",
+      "passes": true,
+      "acceptance_criteria": [
+        "验收门禁自动触发",
+        "全通过→git push+PR",
+        "部署路径检查(VITE_API_BASE+硬编码)",
+        "Phase11文档自动生成"
+      ],
+      "steps": [
+        "实现验收门禁",
+        "实现git push+PR自动创建",
+        "实现部署路径检查",
+        "实现文档自动生成"
+      ],
+      "dependencies": [
+        "TASK-054"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/workflow-engine.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-072",
+      "phase": "2.2",
+      "title": "智能复杂度分析引擎",
+      "description": "title+description→关键词提取→功能数+层数→1-10评分。低(1-3)→1Agent,中(4-6)→2-3,高(7-10)→4+。",
+      "passes": true,
+      "acceptance_criteria": [
+        "estimateComplexity 1-10",
+        "<3→1Agent",
+        "4-6→2-3Agent",
+        ">7→4+Agent",
+        "complexity写入DB"
+      ],
+      "steps": [
+        "创建complexity-analyzer.ts",
+        "实现关键词提取+功能计数",
+        "实现层数识别(前端/后端/DB/DevOps)",
+        "实现评分算法",
+        "编写测试(简单bug=1,全栈app=8+)"
+      ],
+      "dependencies": [
+        "TASK-011"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/complexity-analyzer.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-073",
+      "phase": "2.2",
+      "title": "并行Phase自动识别+调度",
+      "description": "分析Phase DAG→识别无依赖Phase→标记并行→同时spawn多个Agent→峰值4并行。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Phase2.5+4识别并行",
+        "Phase5+6识别并行",
+        "并行spawn+独立worktree",
+        "最多4并行(可配)",
+        "等待所有完成→继续"
+      ],
+      "steps": [
+        "实现并行Phase检测",
+        "实现并行spawn(spawnAgent×N)",
+        "实现等待逻辑",
+        "实现并发上限控制",
+        "编写并行集成测试"
+      ],
+      "dependencies": [
+        "TASK-009",
+        "TASK-047"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/workflow-engine.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-074",
+      "phase": "2.2",
+      "title": "渐进升级—模型自动升档",
+      "description": "QA FAIL×3→自动升级模型(sonnet→opus)→Opus仍FAIL→Blocked。升档含成本提示。",
+      "passes": true,
+      "acceptance_criteria": [
+        "连续FAIL3次→触发升级",
+        "model sonnet→opus",
+        "升级通知toast",
+        "Opus仍FAIL→Blocked",
+        "升级记录写入DB"
+      ],
+      "steps": [
+        "实现模型升档逻辑",
+        "实现FAIL计数+阈值检测",
+        "实现Agent重启(新model)",
+        "实现升档通知",
+        "编写升档测试"
+      ],
+      "dependencies": [
+        "TASK-053"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/orchestrator.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-075",
+      "phase": "2.2",
+      "title": "Agent协作PR自动审查+合并",
+      "description": "Worker提交PR→Leader Agent自动审查→PASS→自动merge→daemon检测merge→自动完成任务。参考agent-kanban prMonitor。",
+      "passes": true,
+      "acceptance_criteria": [
+        "PR自动创建",
+        "Leader自动审查",
+        "自动merge",
+        "Daemon检测完成",
+        "圈复杂度+测试覆盖门禁"
+      ],
+      "steps": [
+        "创建pr-monitor.ts",
+        "实现PR检测(git+GitHub API)",
+        "实现自动审查",
+        "实现自动merge(配置启用)",
+        "实现完成检测"
+      ],
+      "dependencies": [
+        "TASK-055"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/pr-monitor.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-076",
+      "phase": "2.2",
+      "title": "多仓库任务编排",
+      "description": "跨仓库任务依赖：Task A(backend repo)+Task B(frontend repo)→Task C(deploy repo)。跨worktree依赖协调。",
+      "passes": true,
+      "acceptance_criteria": [
+        "跨仓库任务创建",
+        "跨仓库依赖解析",
+        "多worktree协调",
+        "跨仓库PR联动"
+      ],
+      "steps": [
+        "扩展TaskGraph支持跨仓库",
+        "实现多worktree管理",
+        "实现跨仓库PR",
+        "编写跨仓测试"
+      ],
+      "dependencies": [
+        "TASK-005",
+        "TASK-023"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/task-graph.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-077",
+      "phase": "3.1",
+      "title": "Agent间消息总线Pub/Sub",
+      "description": "postMessage/queryMessages/markRead/subscribe(SSE)。6种消息类型。auto-delivery。参考AgentManager。",
+      "passes": true,
+      "acceptance_criteria": [
+        "POST/GET消息",
+        "SSE实时推送",
+        "markRead已读",
+        "broadcast广播",
+        "离线排队"
+      ],
+      "steps": [
+        "创建message-bus.ts",
+        "实现postMessage/queryMessages",
+        "实现broadcast",
+        "实现SSE推送",
+        "实现离线排队",
+        "编写消息测试"
+      ],
+      "dependencies": [
+        "TASK-017",
+        "TASK-018"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/message-bus.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-078",
+      "phase": "3.1",
+      "title": "Cron定时调度—持久化",
+      "description": "SQLite cron_jobs表+node-cron。4种类型(agent-wake/webhook/health-check/custom)。跨重启持久化恢复。参考AgentManager。",
+      "passes": true,
+      "acceptance_criteria": [
+        "创建Cron任务",
+        "5字段cron表达式",
+        "agent-wake定时启动Agent",
+        "重启后自动恢复",
+        "暂停/恢复/删除"
+      ],
+      "steps": [
+        "创建scheduler.ts(参考AgentManager)",
+        "创建cron_jobs表",
+        "实现CRUD+node-cron执行",
+        "实现启动恢复(load from DB)",
+        "编写恢复测试"
+      ],
+      "dependencies": [
+        "TASK-003"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/scheduler.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-079",
+      "phase": "3.1",
+      "title": "通知系统—桌面+Webhook+飞书/钉钉/企微",
+      "description": "多通道通知：Notification API/Webhook POST/飞书卡片/钉钉加签/企业微信。触发：Phase完成/崩溃/Blocked/超预算。",
+      "passes": true,
+      "acceptance_criteria": [
+        "桌面通知(Notification API)",
+        "Webhook通知(POST JSON)",
+        "飞书卡片消息",
+        "钉钉加签(HMAC-SHA256)",
+        "企业微信",
+        "通知配置页面"
+      ],
+      "steps": [
+        "创建notifications.ts",
+        "实现桌面通知",
+        "实现Webhook",
+        "实现飞书/钉钉/企微集成",
+        "创建通知配置UI"
+      ],
+      "dependencies": [
+        "TASK-016"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/notifications.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-080",
+      "phase": "3.1",
+      "title": "Agent GPG签名集成",
+      "description": "检测gpg→生成子密钥→配置git signingkey→commit --gpg-sign。可选(gpg未安装跳过不阻塞)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "gpg安装→自动生成子密钥",
+        "git config自动配置",
+        "commit自动签名",
+        "gpg未装→跳过(不阻塞)",
+        "子密钥关联Agent身份"
+      ],
+      "steps": [
+        "创建gpg-signer.ts",
+        "实现gpg检测",
+        "实现子密钥生成(gpg --quick-generate-key)",
+        "实现git config配置",
+        "实现commit签名",
+        "编写降级测试"
+      ],
+      "dependencies": [
+        "TASK-007"
+      ],
+      "critical_files": [
+        "packages/server/src/engine/gpg-signer.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-081",
+      "phase": "3.1",
+      "title": "aswarm logs—实时日志跟踪",
+      "description": "aswarm logs -f：SSE连接→实时daemon日志。--level/--agent/--follow。彩色输出(chalk)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "logs -f实时跟踪",
+        "--level过滤",
+        "--agent过滤",
+        "Ctrl+C退出",
+        "彩色输出(error红/warn黄/info白)"
+      ],
+      "steps": [
+        "创建logs.ts CLI",
+        "实现SSE连接",
+        "实现过滤",
+        "实现彩色输出",
+        "实现graceful exit"
+      ],
+      "dependencies": [
+        "TASK-018",
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/logs.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-082",
+      "phase": "3.1",
+      "title": "aswarm kill-switch CLI",
+      "description": "aswarm kill-switch：POST /api/kill-switch→显示停止摘要。--reason记录原因。退出码0/1。",
+      "passes": true,
+      "acceptance_criteria": [
+        "立即停止所有",
+        "--reason记录",
+        "显示停止摘要(N个Agent/M个任务)",
+        "退出码正确"
+      ],
+      "steps": [
+        "创建kill-switch.ts CLI",
+        "实现API调用+展示",
+        "实现摘要表格",
+        "实现--reason"
+      ],
+      "dependencies": [
+        "TASK-025",
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/cli/src/commands/kill-switch.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-083",
+      "phase": "3.1",
+      "title": "中文使用文档完整编写",
+      "description": "README.md+快速开始+安装指南+命令参考+Agent角色说明+工作流说明+FAQ+故障排除。全中文Markdown。",
+      "passes": true,
+      "acceptance_criteria": [
+        "README.md(项目介绍+安装+快速开始)",
+        "docs/INSTALL.md",
+        "docs/CLI.md(命令参考)",
+        "docs/AGENTS.md(12角色)",
+        "docs/WORKFLOW.md(11Phase)",
+        "docs/FAQ.md"
+      ],
+      "steps": [
+        "编写README.md",
+        "编写docs/INSTALL.md",
+        "编写docs/CLI.md",
+        "编写docs/AGENTS.md",
+        "编写docs/WORKFLOW.md",
+        "编写docs/FAQ.md"
+      ],
+      "dependencies": [],
+      "critical_files": [
+        "README.md",
+        "docs/INSTALL.md",
+        "docs/CLI.md",
+        "docs/AGENTS.md",
+        "docs/WORKFLOW.md",
+        "docs/FAQ.md"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-084",
+      "phase": "3.1",
+      "title": "Agent执行历史时间线页面",
+      "description": "监控页面时间线：按时间倒序Agent执行记录(启动/完成/崩溃/限流)。筛选+SSE实时+点击跳转。",
+      "passes": true,
+      "acceptance_criteria": [
+        "时间线渲染",
+        "筛选:Agent/状态/时间",
+        "SSE实时追加",
+        "每条:Agent+任务+状态+耗时+成本",
+        "点击跳转详情"
+      ],
+      "steps": [
+        "创建AgentTimeline组件",
+        "实现时间线渲染",
+        "实现筛选器",
+        "实现SSE更新",
+        "实现点击跳转"
+      ],
+      "dependencies": [
+        "TASK-014",
+        "TASK-034"
+      ],
+      "critical_files": [
+        "packages/web/src/components/monitor/AgentTimeline.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-085",
+      "phase": "3.1",
+      "title": "上下文使用率实时监控面板",
+      "description": "SDK usage事件→input_tokens→per-Agent进度条。三色阈值(70/85%)。hover tooltip+85%告警+95%阻止新Agent。",
+      "passes": true,
+      "acceptance_criteria": [
+        "per-Agent进度条",
+        "三色阈值",
+        "hover token分解",
+        "85% toast告警",
+        "95%阻止新Agent"
+      ],
+      "steps": [
+        "创建ContextUsage组件",
+        "实现per-Agent进度条",
+        "实现颜色阈值",
+        "实现hover tooltip",
+        "实现告警toast"
+      ],
+      "dependencies": [
+        "TASK-024",
+        "TASK-034"
+      ],
+      "critical_files": [
+        "packages/web/src/components/monitor/ContextUsage.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-086",
+      "phase": "3.2",
+      "title": "Error日志聚合面板",
+      "description": "error_events表→按Agent/任务/类型/时间过滤→分页(50条/页)。搜索。展开完整堆栈。",
+      "passes": true,
+      "acceptance_criteria": [
+        "错误列表渲染",
+        "多维筛选",
+        "模糊搜索",
+        "分页50条/页",
+        "展开stack trace"
+      ],
+      "steps": [
+        "创建ErrorLogPanel",
+        "实现列表渲染",
+        "实现筛选+搜索",
+        "实现分页",
+        "实现展开详情"
+      ],
+      "dependencies": [
+        "TASK-017"
+      ],
+      "critical_files": [
+        "packages/web/src/components/monitor/ErrorLogPanel.tsx"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-087",
+      "phase": "3.2",
+      "title": "数据导出/导入",
+      "description": "导出：GET /api/export?format=json|csv&scope=tasks|agents|costs。导入：POST /api/import(JSON→去重→事务回滚)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "JSON导出",
+        "CSV导出(中文BOM)",
+        "JSON导入+去重",
+        "导入事务回滚",
+        "文件10MB限制"
+      ],
+      "steps": [
+        "创建routes/export.ts",
+        "创建routes/import.ts",
+        "实现JSON/CSV导出",
+        "实现JSON导入+去重",
+        "实现导入回滚"
+      ],
+      "dependencies": [
+        "TASK-015",
+        "TASK-034"
+      ],
+      "critical_files": [
+        "packages/server/src/routes/export.ts",
+        "packages/server/src/routes/import.ts"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-088",
+      "phase": "3.2",
+      "title": "Electron桌面应用打包",
+      "description": "electron-builder→macOS .dmg/Linux .AppImage/Win .exe。自动启动服务+打开BrowserWindow。应用图标。",
+      "passes": true,
+      "acceptance_criteria": [
+        "macOS .dmg",
+        "Linux .AppImage",
+        "Win .exe",
+        "双击启动服务+UI",
+        "应用图标"
+      ],
+      "steps": [
+        "创建packages/electron",
+        "配置electron-builder.yml",
+        "实现服务启动(spawn node server)",
+        "配置GitHub Actions构建发布",
+        "测试各平台"
+      ],
+      "dependencies": [
+        "TASK-012",
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/electron/main.ts",
+        "electron-builder.yml",
+        ".github/workflows/release.yml"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-089",
+      "phase": "3.2",
+      "title": "性能基准测试",
+      "description": "看板100卡片<100ms/SSE延迟<500ms/5Agent×1000events stress/SQLite>1000events/s。",
+      "passes": true,
+      "acceptance_criteria": [
+        "看板<100ms",
+        "SSE<500ms",
+        "5Agent stress无泄漏",
+        "SQLite>1000/s"
+      ],
+      "steps": [
+        "编写kanban benchmark",
+        "编写sse-latency benchmark",
+        "编写concurrent-agents benchmark",
+        "编写sqlite-throughput benchmark",
+        "集成CI"
+      ],
+      "dependencies": [
+        "TASK-027"
+      ],
+      "critical_files": [
+        "tests/benchmark/"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-090",
+      "phase": "3.2",
+      "title": "压力测试—10Agent并发",
+      "description": "模拟10Agent同时启动+输出+完成→验证并发控制/断路器/内存<1.5GB/30分钟无泄漏。",
+      "passes": true,
+      "acceptance_criteria": [
+        "10Agent同时spawn",
+        "并发控制(5排队)",
+        "断路器打开",
+        "内存<1.5GB",
+        "0泄漏(heap snapshot)"
+      ],
+      "steps": [
+        "编写concurrent-10-agents.spec.ts",
+        "创建mock CLI provider",
+        "实现内存监控",
+        "实现断路器验证",
+        "实现heap对比"
+      ],
+      "dependencies": [
+        "TASK-009",
+        "TASK-010"
+      ],
+      "critical_files": [
+        "tests/stress/concurrent-10-agents.spec.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-091",
+      "phase": "3.2",
+      "title": "TaskGraph单元测试≥90%覆盖",
+      "description": "所有方法+边界(乐观锁冲突/循环检测100节点/并发分配5Agent)。vitest --coverage。",
+      "passes": true,
+      "acceptance_criteria": [
+        ">90%行覆盖",
+        "乐观锁冲突测试",
+        "循环检测边界(自循环/间接/大DAG)",
+        "并发分配(5claim)"
+      ],
+      "steps": [
+        "编写task-graph.test.ts",
+        "覆盖所有public方法",
+        "覆盖所有错误路径",
+        "覆盖并发场景",
+        "配置CI覆盖率门禁(>90%)"
+      ],
+      "dependencies": [
+        "TASK-005"
+      ],
+      "critical_files": [
+        "tests/unit/task-graph.test.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-092",
+      "phase": "3.2",
+      "title": "E2E测试—完整11Phase工作流",
+      "description": "mock CLI providers→启动standard-dev-team→验证11Phase全完成→验证产物(PRD.md/API_CONTRACT/代码/README)。Playwright。",
+      "passes": true,
+      "acceptance_criteria": [
+        "11Phase自动完成",
+        "Phase1产出PRD.md",
+        "Phase2产出API_CONTRACT",
+        "Phase5/6产出代码",
+        "Phase11产出README",
+        "全流程<5min(mock)"
+      ],
+      "steps": [
+        "创建full-workflow.spec.ts",
+        "创建mock CLI providers",
+        "创建测试项目",
+        "触发工作流",
+        "验证每个Phase产物",
+        "Playwright验证UI"
+      ],
+      "dependencies": [
+        "TASK-047",
+        "TASK-055",
+        "TASK-027"
+      ],
+      "critical_files": [
+        "tests/e2e/full-workflow.spec.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-093",
+      "phase": "3.2",
+      "title": "E2E测试—看板拖拽+实时更新",
+      "description": "Playwright：拖拽卡片(API调用+乐观更新)/创建任务(表单→卡片)/SSE→UI/暗色切换/筛选搜索。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Playwright拖拽+API",
+        "Playwright创建+卡片",
+        "Playwright SSE+终端",
+        "Playwright暗色切换",
+        "Playwright筛选搜索"
+      ],
+      "steps": [
+        "创建kanban-interaction.spec.ts",
+        "实现拖拽测试",
+        "实现SSE模拟(mock EventSource)",
+        "实现暗色测试",
+        "实现筛选测试"
+      ],
+      "dependencies": [
+        "TASK-027",
+        "TASK-031",
+        "TASK-033"
+      ],
+      "critical_files": [
+        "tests/e2e/kanban-interaction.spec.ts"
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "id": "TASK-094",
+      "phase": "3.2",
+      "title": "CI/CD Pipeline—GitHub Actions",
+      "description": "lint(biome)→typecheck(tsc)→test(vitest+覆盖率)→build→E2E(Playwright Docker)→publish(npm)。PR全绿。",
+      "passes": true,
+      "acceptance_criteria": [
+        "PR触发CI",
+        "覆盖率上传codecov",
+        "Playwright Docker",
+        "main push→npm publish",
+        "失败→PR comment"
+      ],
+      "steps": [
+        "创建ci.yml",
+        "配置biome lint",
+        "配置vitest+coverage",
+        "配置Playwright(Docker)",
+        "配置npm publish(provenance)"
+      ],
+      "dependencies": [
+        "TASK-001"
+      ],
+      "critical_files": [
+        ".github/workflows/ci.yml"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-095",
+      "phase": "3.2",
+      "title": "Docker部署—单容器+docker-compose",
+      "description": "Dockerfile(多阶段:build→production)。docker-compose(app+volume)。一键docker compose up。<200MB。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Dockerfile多阶段",
+        "docker build<200MB",
+        "docker compose up一键",
+        "SQLite持久化(volume)",
+        "WORKDIR挂载"
+      ],
+      "steps": [
+        "编写Dockerfile",
+        "编写docker-compose.yml",
+        "编写.dockerignore",
+        "实现HEALTHCHECK",
+        "编写docs/DOCKER.md"
+      ],
+      "dependencies": [
+        "TASK-081"
+      ],
+      "critical_files": [
+        "Dockerfile",
+        "docker-compose.yml",
+        "docs/DOCKER.md"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-096",
+      "phase": "3.2",
+      "title": "安全审计—npm audit+CodeQL+Snyk",
+      "description": "npm audit(每周auto-fix→PR)。CodeQL扫描。Snyk依赖监控。漏洞<7天SLA。",
+      "passes": true,
+      "acceptance_criteria": [
+        "npm audit无高危",
+        "CodeQL零告警",
+        "Snyk监控",
+        "CI每次PR扫描",
+        "<7天修复SLA"
+      ],
+      "steps": [
+        "配置npm audit CI",
+        "配置CodeQL workflow",
+        "配置Snyk",
+        "编写SECURITY.md",
+        "修复已有漏洞"
+      ],
+      "dependencies": [
+        "TASK-077"
+      ],
+      "critical_files": [
+        ".github/workflows/codeql.yml",
+        "SECURITY.md"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-097",
+      "phase": "3.2",
+      "title": "网络安全加固—CORS+Helmet+RateLimit+SQL注入",
+      "description": "CORS白名单(仅localhost)、Helmet安全头、API rate limit(100req/min)、SQL注入防护(参数化查询)。",
+      "passes": true,
+      "acceptance_criteria": [
+        "CORS仅localhost",
+        "Helmet启用",
+        "Rate limit生效",
+        "SQL注入测试通过(sqlmap)",
+        "请求体10MB"
+      ],
+      "steps": [
+        "配置CORS白名单",
+        "安装+配置helmet",
+        "实现rate limiting",
+        "配置body limit",
+        "运行sqlmap扫描"
+      ],
+      "dependencies": [
+        "TASK-012"
+      ],
+      "critical_files": [
+        "packages/server/src/middleware/cors.ts",
+        "packages/server/src/middleware/rate-limit.ts"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-098",
+      "phase": "3.2",
+      "title": "国际化i18n—中文优先",
+      "description": "所有用户可见文本从zh-CN.json加载。react-i18next(Web)+自定义i18n(Server/CLI)。预留en.json。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Web:react-i18next集成",
+        "Server:中文错误消息",
+        "CLI:中文输出",
+        "en.json预留",
+        "语言切换不影响功能"
+      ],
+      "steps": [
+        "安装react-i18next",
+        "创建zh-CN.json(~200条)",
+        "创建en.json(预留)",
+        "Web集成",
+        "Server/CLI helper"
+      ],
+      "dependencies": [
+        "TASK-026",
+        "TASK-036"
+      ],
+      "critical_files": [
+        "packages/shared/src/i18n/zh-CN.json",
+        "packages/shared/src/i18n/en.json"
+      ],
+      "estimated_complexity": "medium"
+    },
+    {
+      "id": "TASK-099",
+      "phase": "3.2",
+      "title": "无障碍a11y—键盘+屏幕阅读器",
+      "description": "Tab/Enter/Escape/Arrow全键盘。ARIA label。色彩对比度WCAG AA。shadcn/ui自带Radix a11y。",
+      "passes": true,
+      "acceptance_criteria": [
+        "Tab遍历所有元素",
+        "Enter/Space激活",
+        "Escape关闭弹窗",
+        "ARIA label全覆盖",
+        "对比度≥4.5:1"
+      ],
+      "steps": [
+        "审查所有组件键盘操作",
+        "添加ARIA label",
+        "测试Tab导航",
+        "测试对比度(axe DevTools)",
+        "编写a11y测试(jest-axe)"
+      ],
+      "dependencies": [
+        "TASK-026"
+      ],
+      "critical_files": [
+        "packages/web/src/components/"
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "id": "TASK-100",
+      "phase": "3.2",
+      "title": "CHANGELOG+语义化版本+自动发布",
+      "description": "semantic-release：commit分析→CHANGELOG生成→版本计算→GitHub Release→npm publish。Conventional Commits lint。",
+      "passes": true,
+      "acceptance_criteria": [
+        "语义化版本自动",
+        "CHANGELOG自动生成",
+        "GitHub Release自动",
+        "npm publish自动",
+        "commitlint生效"
+      ],
+      "steps": [
+        "安装semantic-release",
+        "配置.releaserc.json",
+        "配置commitlint",
+        "配置husky commit-msg",
+        "测试tag push→发布"
+      ],
+      "dependencies": [
+        "TASK-077"
+      ],
+      "critical_files": [
+        ".releaserc.json",
+        "commitlint.config.js"
+      ],
+      "estimated_complexity": "low"
+    }
+  ]
+}

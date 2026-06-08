@@ -1,0 +1,57 @@
+# ── Dependencies ─────────────────────────────────────────
+node_modules/
+
+# ── Build outputs ───────────────────────────────────────
+dist/
+*.tsbuildinfo
+
+# ── Database ────────────────────────────────────────────
+*.db
+__test_*.db
+
+# ── Screenshots & test artifacts ────────────────────────
+*.png
+*.jpg
+.claude/playwright-snapshots/
+
+# ── External projects ───────────────────────────────────
+github_copy/
+docs/
+
+# ── OS files ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Personal config (keep .claude/ but exclude personal) ─
+.claude/settings.local.json
+.claude/credentials.json
+
+# ── Harness runtime ─────────────────────────────────────
+memory/
+.learnings/
+.config/
+
+# ── Test artifacts ──────────────────────────────────────
+*.yml
+*.yaml
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!docker-compose.yml
+!**/*.yaml.md
+
+# ── Agent execution artifacts ───────────────────────────
+packages/server/*.py
+
+# ── Session data ────────────────────────────────────────
+.claude/session-audit.json
+.claude/settings.json
+
+# ── Generated ───────────────────────────────────────────
+.auto-agent/gen-tasks.js
+
+# ── Misc ────────────────────────────────────────────────
+*.log
+.tmp/
+temp/
+__pycache__/

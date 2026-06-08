@@ -1,0 +1,12 @@
+git push --force
+git push -f
+git reset --hard
+rm -rf /
+rm -rf ~
+git branch -D
+git checkout -- .
+git clean -fd
+DROP TABLE
+DROP DATABASE
+TRUNCATE TABLE
+format c:

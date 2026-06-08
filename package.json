@@ -1,0 +1,27 @@
+{
+  "name": "agent-swarm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent Swarm — Dark Factory 全自主多 Agent 开发平台",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,green \"pnpm dev:server\" \"pnpm dev:web\"",
+    "start": "concurrently -n server,web -c cyan,green \"pnpm dev:server\" \"pnpm dev:web\"",
+    "build": "pnpm --recursive build",
+    "build:shared": "pnpm --filter @agent-swarm/shared build",
+    "build:server": "pnpm --filter @agent-swarm/server build",
+    "build:web": "pnpm --filter @agent-swarm/web build",
+    "build:cli": "pnpm --filter @agent-swarm/cli build",
+    "dev:server": "pnpm --filter @agent-swarm/server dev",
+    "dev:web": "pnpm --filter @agent-swarm/web dev",
+    "typecheck": "pnpm --recursive typecheck",
+    "test": "pnpm --recursive test",
+    "clean": "pnpm --recursive clean"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "packageManager": "pnpm@11.5.1",
+  "dependencies": {
+    "concurrently": "^10.0.3"
+  }
+}

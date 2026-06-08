@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Markdown Advisor"
+  short_description: "审查、优化、创建 AGENTS.md 与 CLAUDE.md 指令文件"
+  default_prompt: "Use $agent-md-advisor to review my AGENTS.md and CLAUDE.md against best practices, then suggest focused improvements."
