@@ -45,18 +45,34 @@ export function migrate(): void {
     db.run(ddl);
   }
 
-  // 6. Create all indexes
+  // 6. v6: Remove role CHECK constraint from agents (app validates now)
+  //    Direct sqlite_master manipulation — only way without DROP/RECREATE
+  if (currentVersion < 6) {
+    const oldSql = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'");
+    if (oldSql[0] && oldSql[0].values[0]) {
+      const sql = oldSql[0].values[0][0] as string;
+      // Replace CHECK constraint on role with no-op (remove it)
+      const fixed = sql.replace(/,\s*role TEXT NOT NULL CHECK\s*\(role IN \([^)]+\)\)/, ", role TEXT NOT NULL");
+      if (fixed !== sql) {
+        db.run("PRAGMA writable_schema = ON");
+        db.run("UPDATE sqlite_master SET sql = ? WHERE type='table' AND name='agents'", [fixed]);
+        db.run("PRAGMA writable_schema = OFF");
+      }
+    }
+  }
+
+  // 7. Create all indexes
   for (const idx of SCHEMA_INDEXES) {
     db.run(idx);
   }
 
-  // 7. Record the schema version
+  // 8. Record the schema version
   db.run(
     "INSERT INTO schema_version (version) VALUES (?)",
     [SCHEMA_VERSION]
   );
 
-  // 8. Persist to disk
+  // 9. Persist to disk
   saveDb();
 }
 

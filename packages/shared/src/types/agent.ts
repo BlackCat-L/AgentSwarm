@@ -2,7 +2,7 @@
 // Agent types — 对齐 SQL agents + agent_capabilities 表 + Ed25519 身份
 // ============================================================
 
-/** Agent 12+1 内置角色 */
+/** Agent 内置角色 + 允许自定义 */
 export type AgentRole =
   | "orchestrator"
   | "product-manager"
@@ -11,8 +11,10 @@ export type AgentRole =
   | "database-optimizer"
   | "backend-architect"
   | "frontend-developer"
+  | "frontend-architect"
   | "devops-automator"
   | "testing-evidence-collector"
+  | "testing-qa"
   | "security-engineer"
   | "code-reviewer"
   | "reality-checker"
@@ -71,20 +73,12 @@ export interface AgentIdentity {
 }
 
 /** 角色到推荐模型的映射 */
-export const ROLE_MODEL_MAP: Record<AgentRole, AgentModel> = {
-  orchestrator: "sonnet",
-  "product-manager": "sonnet",
-  "software-architect": "opus",
-  "ui-designer": "sonnet",
-  "database-optimizer": "sonnet",
-  "backend-architect": "sonnet",
-  "frontend-developer": "sonnet",
-  "devops-automator": "sonnet",
-  "testing-evidence-collector": "sonnet",
-  "security-engineer": "sonnet",
-  "code-reviewer": "sonnet",
-  "reality-checker": "opus",
-  "technical-writer": "sonnet",
+export const ROLE_MODEL_MAP: Partial<Record<AgentRole, AgentModel>> & Record<string, AgentModel> = {
+  orchestrator: "sonnet", "product-manager": "sonnet", "software-architect": "opus",
+  "ui-designer": "sonnet", "database-optimizer": "sonnet", "backend-architect": "sonnet",
+  "frontend-developer": "sonnet", "frontend-architect": "sonnet", "devops-automator": "sonnet",
+  "testing-evidence-collector": "sonnet", "testing-qa": "sonnet", "security-engineer": "sonnet",
+  "code-reviewer": "sonnet", "reality-checker": "opus", "technical-writer": "sonnet",
   custom: "sonnet",
 };
 
@@ -96,14 +90,11 @@ export const ROLE_LABEL_ZH: Record<AgentRole, string> = {
   "ui-designer": "UI设计师",
   "database-optimizer": "数据库优化师",
   "backend-architect": "后端工程师",
-  "frontend-developer": "前端工程师",
-  "devops-automator": "DevOps自动化",
-  "testing-evidence-collector": "QA取证专家",
-  "security-engineer": "安全工程师",
-  "code-reviewer": "代码审查员",
-  "reality-checker": "验收官",
-  "technical-writer": "技术写手",
-  custom: "自定义",
+  "frontend-developer": "前端工程师", "frontend-architect": "前端架构师",
+  "devops-automator": "DevOps自动化", "testing-evidence-collector": "QA取证专家",
+  "testing-qa": "QA测试员", "security-engineer": "安全工程师",
+  "code-reviewer": "代码审查员", "reality-checker": "验收官",
+  "technical-writer": "技术写手", custom: "自定义",
 };
 
 /** Agent 注册输入 */

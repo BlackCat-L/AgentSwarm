@@ -16,7 +16,7 @@ const scorer = new CapabilityScorer();
 const createSchema = z.object({
   project_id: z.string().min(1),
   name: z.string().min(1, "Agent名称不能为空"),
-  role: z.string().min(1),
+  role: z.string().min(1, "角色不能为空"),
   runtime: z.enum(["claude-code", "hermes", "openclaw"]).default("claude-code"),
   model: z.enum(["opus", "sonnet", "haiku"]).default("sonnet"),
   capabilities: z.array(z.string()).default([]),
@@ -90,6 +90,7 @@ router.get("/:id", (c) => {
 
 // POST /api/agents — register new agent (with Ed25519 identity)
 router.post("/", async (c) => {
+  try {
   const parsed = await parseBody(c, createSchema);
   if (parsed.error) return c.json({ error: "请求参数校验失败", details: parsed.error }, 400);
 
@@ -133,6 +134,7 @@ router.post("/", async (c) => {
   stmt.bind([id]); stmt.step();
   const row = agentRow(stmt.getAsObject()); stmt.free();
   return c.json({ ...row, identity: JSON.parse(identityJson) }, 201);
+  } catch (e: any) { console.error('[agents] POST error:', e.message, e.stack?.slice(0,200)); return c.json({ error: "服务器内部错误", detail: e.message }, 500); }
 });
 
 // PATCH /api/agents/:id — update

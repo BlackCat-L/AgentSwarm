@@ -60,14 +60,14 @@ describe("Database Schema", () => {
     }).toThrow();
   });
 
-  it("should enforce CHECK constraint on agent role", () => {
+  it("should accept any custom role string (CHECK removed for flexibility)", () => {
     const db = getDb();
     expect(() => {
       db.run(
-        "INSERT INTO agents (id, project_id, name, role) VALUES (?, ?, ?, ?)",
-        ["agent-1", "proj-1", "Test", "invalid-role"]
+        "INSERT INTO agents (id, project_id, name, role, capabilities) VALUES (?, ?, ?, ?, ?)",
+        ["agent-custom", "proj-1", "CustomAgent", "my-custom-role", "[]"]
       );
-    }).toThrow();
+    }).not.toThrow();
   });
 
   it("should enforce CHECK constraint on task priority", () => {

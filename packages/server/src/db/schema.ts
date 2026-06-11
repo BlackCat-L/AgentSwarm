@@ -6,7 +6,7 @@
  * Versioned schema definitions. Each entry is a migration version.
  * DDL statements are executed in order, idempotently.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_DDL = [
   // ====== 1. projects ======
@@ -26,11 +26,7 @@ export const SCHEMA_DDL = [
     id            TEXT PRIMARY KEY,
     project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name          TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK(role IN (
-                    'orchestrator','product-manager','software-architect','ui-designer',
-                    'database-optimizer','backend-architect','frontend-developer',
-                    'devops-automator','testing-evidence-collector','security-engineer',
-                    'code-reviewer','reality-checker','technical-writer','custom')),
+    role          TEXT NOT NULL,
     runtime       TEXT NOT NULL DEFAULT 'claude-code' CHECK(runtime IN ('claude-code','hermes','openclaw')),
     model         TEXT NOT NULL DEFAULT 'sonnet' CHECK(model IN ('opus','sonnet','haiku')),
     status        TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle','busy','offline','error','paused')),
