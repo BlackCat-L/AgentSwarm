@@ -12,6 +12,7 @@
     "build:web": "pnpm --filter @agent-swarm/web build",
     "build:cli": "pnpm --filter @agent-swarm/cli build",
     "dev:server": "pnpm --filter @agent-swarm/server dev",
+    "dev:server:stable": "pnpm --filter @agent-swarm/server dev:stable",
     "dev:web": "pnpm --filter @agent-swarm/web dev",
     "typecheck": "pnpm --recursive typecheck",
     "test": "pnpm --recursive test",

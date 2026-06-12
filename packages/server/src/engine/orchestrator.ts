@@ -38,14 +38,35 @@ export interface DecompositionResult {
 
 // ── Helper: call Claude Code for structured thinking ────────
 
-async function askClaude(prompt: string, model = "haiku"): Promise<string> {
+function resolveClaudeBin(): string {
+  // On Windows, spawn claude.exe directly to avoid cmd.exe shell
+  // which corrupts UTF-8 through the system codepage (GBK/CP936).
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || "";
+    // Build path with OS-native separators
+    const sep = process.platform === "win32" ? "\\" : "/";
+    return [appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"].join(sep);
+  }
+  return "claude";
+}
+
+async function askClaude(prompt: string, model = "deepseek-v4-flash"): Promise<string> {
   const { spawn } = await import("node:child_process");
   const { createInterface } = await import("node:readline");
+  const bin = resolveClaudeBin();
   return new Promise((resolve, reject) => {
-    const proc = spawn("claude", ["-p", "--output-format", "stream-json", "--verbose", "--model", model], {
-      env: { ...process.env }, stdio: ["pipe", "pipe", "pipe"], shell: true,
+    const execEnv = { ...process.env };
+    delete execEnv.ANTHROPIC_MODEL;
+    delete execEnv.ANTHROPIC_SMALL_FAST_MODEL;
+
+    const proc = spawn(bin, ["-p", "--output-format", "stream-json", "--verbose", "--model", model], {
+      env: execEnv, stdio: ["pipe", "pipe", "pipe"],
     });
     const lines: string[] = [];
+    proc.on("error", (err: NodeJS.ErrnoException) => {
+      console.error(`[askClaude] spawn error (${bin}): ${err.code} — ${err.message}`);
+      reject(err);
+    });
     const rl = createInterface({ input: proc.stdout! });
     proc.stderr!.on("data", (c: Buffer) => proc.stdout!.emit("data", c));
     rl.on("line", (line: string) => {
@@ -54,7 +75,12 @@ async function askClaude(prompt: string, model = "haiku"): Promise<string> {
       }} catch {}
     });
     proc.on("exit", (c) => c === 0 ? resolve(lines.join("\n")) : reject(new Error(`exit ${c}`)));
-    proc.stdin!.write(prompt); proc.stdin!.end();
+    // Guard: stdin may be null if spawn failed before pipes established
+    if (proc.stdin) {
+      proc.stdin.end(Buffer.from(prompt, "utf-8"));
+    } else {
+      reject(new Error("Claude Code process failed to start (no stdin)"));
+    }
     setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, 120_000);
   });
 }
@@ -120,32 +146,43 @@ export class Orchestrator {
     title: string, description: string, complexity: ComplexityReport
   ): Promise<DecompositionResult> {
     const prompt = `你是一个软件架构师。把以下需求拆解成具体的子任务。
-返回纯 JSON（不要 markdown 代码块）。每个子任务必须有明确的能力标签。
+返回纯 JSON（不要 markdown 代码块）。
+
+能力标签必须从以下列表选择（可多选）:
+- database   (数据库/表设计/查询/迁移)
+- api        (API设计/REST/接口)
+- backend    (后端逻辑/业务规则)
+- frontend   (前端/UI/组件/样式)
+- security   (安全/认证/授权/加密)
+- testing    (测试/验证/QA)
+- devops     (部署/CI/CD/构建)
+- performance (性能优化/缓存)
+- architecture (系统设计/模块划分)
 
 {
   "subTasks": [
     {
       "title": "子任务标题",
-      "description": "详细描述",
+      "description": "详细描述（包含具体要做什么、涉及哪些文件）",
       "requiredCapabilities": ["backend", "database"],
       "dependsOn": [0],
-      "acceptanceCriteria": "如何验证完成"
+      "acceptanceCriteria": "可验证的完成标准"
     }
   ],
   "estimatedTotalMinutes": <估计总分钟数>,
-  "recommendedModel": "<sonnet|opus|haiku>"
+  "recommendedModel": "<deepseek-v4-pro[1m]|deepseek-v4-flash>"
 }
 
 规则:
-- dependsOn 是数组索引，如 dependsOn: [0, 2] 表示依赖第0和第2个子任务
-- 第一个子任务的 dependsOn 应为空数组 []
-- 每个子任务分配给一个角色
-- 复杂度评分: ${complexity.score}/10，建议 ${complexity.suggestedAgentCount} 个agent并行
+- dependsOn 是数组索引，[0] 表示依赖第0个子任务，第一个子任务用 []
+- requiredCapabilities 必须用上面列出的标签，不要自己编造
+- 复杂度: ${complexity.score}/10，建议 ${complexity.suggestedAgentCount} 个agent并行
+- 每个子任务描述要足够详细（100字以上），包含涉及的文件
 
 需求标题: ${title}
 需求描述: ${description}`;
 
-    const output = await askClaude(prompt, "sonnet");
+    const output = await askClaude(prompt, "deepseek-v4-pro[1m]");
     try {
       const json = JSON.parse(output.replace(/```[^]*?```/g, "").trim());
       return {
@@ -157,14 +194,14 @@ export class Orchestrator {
           acceptanceCriteria: t.acceptanceCriteria ?? "",
         })),
         estimatedTotalMinutes: json.estimatedTotalMinutes ?? 30,
-        recommendedModel: json.recommendedModel ?? "sonnet",
+        recommendedModel: json.recommendedModel ?? "deepseek-v4-flash",
       };
     } catch {
       // Fallback: single task
       return {
         subTasks: [{ title, description, requiredCapabilities: [], dependsOn: [], acceptanceCriteria: "" }],
         estimatedTotalMinutes: 15,
-        recommendedModel: "sonnet",
+        recommendedModel: "deepseek-v4-flash",
       };
     }
   }
@@ -295,10 +332,13 @@ export class Orchestrator {
 
     // Step 4: Auto-assign agents to all tasks
     const { ExecutionService } = await import("./execution-service.js");
+    const { QualityGateService } = await import("./quality-gate.js");
     const executor = new ExecutionService(this.taskGraph);
+    const qualityGate = new QualityGateService();
 
-    // Collect all agents in this project
+    // Collect all agents + build lookup map
     const allAgents = await this._getAgents(projectId);
+    const agentMap = new Map(allAgents.map(a => [a.id, a]));
 
     // Assign agents to each task
     for (const taskId of plan.taskIds) {
@@ -306,19 +346,16 @@ export class Orchestrator {
       if (!task) continue;
       const bestAgent = this.selectBestAgent(allAgents, task.required_capabilities, projectId);
       if (bestAgent) {
-        // Assign but don't execute yet — wait for dependencies
         this.taskGraph.assignTask(taskId, bestAgent, task.version);
       }
     }
 
-    // Step 5: Execute tasks in dependency order
-    // Start with tasks that have no dependencies
+    // Step 5: Execute tasks in dependency order with quality gates
     const remaining = new Set(plan.taskIds);
     let completed = 0;
     let blocked = 0;
 
     while (remaining.size > 0) {
-      // Find tasks whose dependencies are all Done
       const ready = [...remaining].filter(id => {
         if (executor.isRunning(id)) return false;
         const task = this.taskGraph.getTask(id);
@@ -329,28 +366,72 @@ export class Orchestrator {
       });
 
       if (ready.length === 0) {
-        // Check if any tasks are still running
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
 
-      // Execute ready tasks in parallel
+      // Execute ready InDev tasks in parallel (with agent context + role prompt)
       const results = await Promise.allSettled(
-        ready.map(taskId => executor.executeTask(taskId).catch(e => ({ success: false, output: "", error: e.message })))
+        ready.map(taskId => {
+          const task = this.taskGraph.getTask(taskId);
+          const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
+          const model = agent?.model || "deepseek-v4-flash";
+          return executor.executeTask(taskId, model, agent).catch(e => ({ success: false, output: "", error: e.message }));
+        })
       );
 
+      // Process results + run quality gates for each completed execution
       for (let i = 0; i < ready.length; i++) {
         const taskId = ready[i]!;
         const result = results[i];
+
         if (result?.status === "fulfilled" && result.value.success) {
+          const task = this.taskGraph.getTask(taskId);
+          if (!task) continue;
+
+          // ── Quality Gate Chain ──
+          const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
+
+          if (gateReport?.overallPassed) {
+            // ✅ All gates passed → promote to Done
+            console.log(`[QualityGate] ${gateReport.summary}`);
+            const fresh = this.taskGraph.getTask(taskId);
+            if (fresh) {
+              this.taskGraph.updateTask(taskId, { status: "Done", version: fresh.version });
+            }
+            remaining.delete(taskId);
+            completed++;
+            await this.propagateContext(taskId);
+          } else if (gateReport) {
+            // ⚠️ Gates failed → move to InFix for retry
+            console.log(`[QualityGate] ${gateReport.summary}`);
+            const failedGates = gateReport.gates
+              .filter(g => !g.passed)
+              .map(g => `  - [${g.gate}] ${g.findings.join("; ") || "检查未通过"}`)
+              .join("\n");
+            const fresh = this.taskGraph.getTask(taskId);
+            if (fresh) {
+              this.taskGraph.updateTask(taskId, {
+                description: (task.description || "") + `\n\n---\n### ⚠️ 质量门禁未通过\n${failedGates}`,
+                status: "InFix",
+                version: fresh.version,
+              });
+            }
+            remaining.delete(taskId);
+            blocked++;
+          } else {
+            // No gate report (gate service errored) → promote to Done anyway
+            remaining.delete(taskId);
+            completed++;
+            await this.propagateContext(taskId);
+          }
+        } else {
+          // Execution failed
           remaining.delete(taskId);
-          completed++;
-          // Propagate context to dependent tasks
-          await this.propagateContext(taskId);
+          blocked++;
         }
       }
 
-      // Update agent busies after each batch
       await new Promise(r => setTimeout(r, 1000));
     }
 

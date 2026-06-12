@@ -18,7 +18,7 @@ const createSchema = z.object({
   name: z.string().min(1, "Agent名称不能为空"),
   role: z.string().min(1, "角色不能为空"),
   runtime: z.enum(["claude-code", "hermes", "openclaw"]).default("claude-code"),
-  model: z.enum(["opus", "sonnet", "haiku"]).default("sonnet"),
+  model: z.enum(["deepseek-v4-pro[1m]", "deepseek-v4-flash"]).default("deepseek-v4-flash"),
   capabilities: z.array(z.string()).default([]),
   permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("acceptEdits"),
 });
@@ -26,7 +26,7 @@ const createSchema = z.object({
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
   status: z.enum(["idle", "busy", "offline", "error", "paused"]).optional(),
-  model: z.enum(["opus", "sonnet", "haiku"]).optional(),
+  model: z.enum(["deepseek-v4-pro[1m]", "deepseek-v4-flash"]).optional(),
   permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).optional(),
 });
 

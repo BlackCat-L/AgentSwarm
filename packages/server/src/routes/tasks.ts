@@ -2,13 +2,13 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { TaskGraph } from "../engine/task-graph.js";
+import { sharedGraph } from "../engine/shared-services.js";
 import { ExecutionService } from "../engine/execution-service.js";
 import type { TaskStatus, TaskPriority } from "@agent-swarm/shared";
 import { canTransition } from "@agent-swarm/shared";
 
 const router = new Hono();
-const graph = new TaskGraph();
+const graph = sharedGraph;
 
 // ── Schema ─────────────────────────────────────────────────
 
@@ -211,7 +211,7 @@ router.post("/:id/execute", async (c) => {
   const executor = new ExecutionService(graph);
 
   try {
-    const model = c.req.query("model") || "haiku";
+    const model = c.req.query("model") || "deepseek-v4-flash";
     const result = await executor.executeTask(id, model);
     return c.json({
       taskId: id,

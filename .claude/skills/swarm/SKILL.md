@@ -1,7 +1,7 @@
 ---
 name: swarm
 description: 一句话启动 Agent Swarm 全自动开发管道
-version: 1.0.0
+version: 1.1.0
 triggers:
   - swarm
   - /swarm
@@ -21,6 +21,10 @@ triggers:
 /swarm 写一个 Python 脚本批量处理 CSV 文件
 ```
 
+## ⚠️ 编码铁律
+
+**所有 API 调用必须用 Python，禁止 bash curl 传中文！** Windows 上 bash → curl 链路会经过 GBK codepage 破坏 UTF-8 数据。使用以下 Python 封装或 `PYTHONIOENCODING=utf-8 python3 tools/seed_agents.py`。
+
 ## 流程
 
 当用户输入 `/swarm <需求>` 后，你必须执行以下步骤：
@@ -28,36 +32,66 @@ triggers:
 ### Step 1: 获取项目 ID
 
 ```bash
-curl -s http://localhost:5120/api/projects | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{const p=JSON.parse(d.join(''));console.log(p[0]?.id||'none')})"
+python3 -c "
+import urllib.request, json
+proj = json.loads(urllib.request.urlopen('http://localhost:5120/api/projects').read())
+print(proj[0]['id'] if proj else 'none')
+"
 ```
 
-如果返回 `none`，先创建项目。
+如果返回 `none`，创建项目：
+
+```bash
+python3 -c "
+import urllib.request, json
+data = json.dumps({'name':'Agent Swarm 默认项目','path':'.'}, ensure_ascii=False).encode('utf-8')
+req = urllib.request.Request('http://localhost:5120/api/projects', data=data, method='POST')
+req.add_header('Content-Type', 'application/json; charset=utf-8')
+resp = json.loads(urllib.request.urlopen(req).read())
+print(resp['id'])
+"
+```
 
 ### Step 2: 确保有 Agent
 
 ```bash
-curl -s http://localhost:5120/api/agents | node -e "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{const a=JSON.parse(d.join(''));console.log(a.length||0)})"
+python3 -c "
+import urllib.request, json
+agents = json.loads(urllib.request.urlopen('http://localhost:5120/api/agents').read())
+print(len(agents))
+"
 ```
 
-如果没有 Agent（返回 0），注册默认团队：
+如果返回 0（服务器 auto-seed 已涵盖新装，此处为安全兜底）：
 
 ```bash
-curl -s -X POST http://localhost:5120/api/agents -H "Content-Type: application/json" -d '{"project_id":"<PROJECT_ID>","name":"后端工程师","role":"backend-architect","capabilities":["backend","api","python","database"]}'
-curl -s -X POST http://localhost:5120/api/agents -H "Content-Type: application/json" -d '{"project_id":"<PROJECT_ID>","name":"前端工程师","role":"frontend-developer","capabilities":["frontend","react","ui"]}'
-curl -s -X POST http://localhost:5120/api/agents -H "Content-Type: application/json" -d '{"project_id":"<PROJECT_ID>","name":"QA工程师","role":"testing-evidence-collector","capabilities":["testing","qa"]}'
+PYTHONIOENCODING=utf-8 python3 tools/seed_agents.py
 ```
 
 ### Step 3: 一键启动全自动管道
 
+**必须用 Python！** bash curl 传中文会损坏编码，导致编排器收到乱码。
+
 ```bash
-curl -s -X POST http://localhost:5120/api/auto \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d "{\"project_id\":\"<PROJECT_ID>\",\"title\":\"<用户的需求>\",\"description\":\"<用户的详细描述>\"}"
+python3 -c "
+import urllib.request, json
+
+title = '<用户的需求>'
+desc = '<用户的详细描述>'
+pid = '<PROJECT_ID>'
+
+body = json.dumps({'project_id': pid, 'title': title, 'description': desc}, ensure_ascii=False).encode('utf-8')
+req = urllib.request.Request('http://localhost:5120/api/auto', data=body, method='POST')
+req.add_header('Content-Type', 'application/json; charset=utf-8')
+resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+print(json.dumps(resp, ensure_ascii=False, indent=2))
+"
 ```
 
-### Step 4: 返回结果
+### Step 4: 等待执行，展示看板
 
 告诉用户：
-- 复杂度评分
-- 拆解成了几个子任务
-- **看板地址 http://localhost:5173** 刷新看进度
+- 复杂度评分（来自 `complexity.score`）
+- 拆解结果（`complexity.estimatedPhases`）
+- **看板地址 http://localhost:5173** 刷新看板查看进度
+- 等待约 15-30 秒后，调用 `/api/tasks` 检查任务是否已创建并展示状态

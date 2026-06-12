@@ -11,6 +11,20 @@ import {
   PRAGMAS,
 } from "./schema.js";
 
+/** Helper: remove a CHECK constraint from the agents table via sqlite_master */
+function removeAgentCheckConstraint(db: ReturnType<typeof getDb>, pattern: RegExp): void {
+  const oldSql = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'");
+  if (oldSql[0] && oldSql[0].values[0]) {
+    const sql = oldSql[0].values[0][0] as string;
+    const fixed = sql.replace(pattern, "");
+    if (fixed !== sql) {
+      db.run("PRAGMA writable_schema = ON");
+      db.run("UPDATE sqlite_master SET sql = ? WHERE type='table' AND name='agents'", [fixed]);
+      db.run("PRAGMA writable_schema = OFF");
+    }
+  }
+}
+
 /**
  * Run all migrations. Idempotent — safe to call multiple times.
  * After migration, saves the database to disk.
@@ -45,34 +59,28 @@ export function migrate(): void {
     db.run(ddl);
   }
 
-  // 6. v6: Remove role CHECK constraint from agents (app validates now)
-  //    Direct sqlite_master manipulation — only way without DROP/RECREATE
+  // 6. v6: Remove role CHECK constraint from agents
   if (currentVersion < 6) {
-    const oldSql = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'");
-    if (oldSql[0] && oldSql[0].values[0]) {
-      const sql = oldSql[0].values[0][0] as string;
-      // Replace CHECK constraint on role with no-op (remove it)
-      const fixed = sql.replace(/,\s*role TEXT NOT NULL CHECK\s*\(role IN \([^)]+\)\)/, ", role TEXT NOT NULL");
-      if (fixed !== sql) {
-        db.run("PRAGMA writable_schema = ON");
-        db.run("UPDATE sqlite_master SET sql = ? WHERE type='table' AND name='agents'", [fixed]);
-        db.run("PRAGMA writable_schema = OFF");
-      }
-    }
+    removeAgentCheckConstraint(db, /,\s*role TEXT NOT NULL CHECK\s*\(role IN \([^)]+\)\)/);
   }
 
-  // 7. Create all indexes
+  // 7. v7: Remove model CHECK constraint from agents (supports any model name)
+  if (currentVersion < 7) {
+    removeAgentCheckConstraint(db, /CHECK\s*\(model IN \([^)]+\)\)/);
+  }
+
+  // 8. Create all indexes
   for (const idx of SCHEMA_INDEXES) {
     db.run(idx);
   }
 
-  // 8. Record the schema version
+  // 9. Record the schema version
   db.run(
     "INSERT INTO schema_version (version) VALUES (?)",
     [SCHEMA_VERSION]
   );
 
-  // 9. Persist to disk
+  // 10. Persist to disk
   saveDb();
 }
 

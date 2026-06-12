@@ -7,7 +7,7 @@
 #   .\init.ps1 -Update            →  更新已有部署（跳过下载，只用缓存）
 #   .\init.ps1 D:\MyProject -Update → 更新指定项目
 #
-# 原理：先检查本地是否有 kit 文件，没有就从 GitHub 下载。
+# 原理：先检查本地是否有 kit 文件，没有就从 GitHub 下载（失败则回退到 Gitee）。
 # ============================================================
 param(
     [string]$Target = (Get-Location).Path,
@@ -16,8 +16,9 @@ param(
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Missing = [System.Collections.ArrayList]::new()
-$KIT_REPO = "https://github.com/BlackCat-L/claude-workflow-kit"
-$KIT_ZIP  = "$KIT_REPO/archive/refs/heads/master.zip"
+$KIT_GIT_REPO = "https://gitee.com/weifeng_code/claude-workflow-kit.git"
+# GitHub 原始仓库（Gitee 不可用时的回退）
+$KIT_GIT_REPO_FALLBACK = "https://github.com/BlackCat-L/claude-workflow-kit.git"
 
 Write-Host "`n🚀 claude-workflow-kit 一键部署" -ForegroundColor Cyan
 Write-Host "   目标: $Target" -ForegroundColor DarkGray
@@ -32,6 +33,22 @@ $KitRoot = $null
 if ((Test-Path "$ScriptDir\.mcp.json") -and (Test-Path "$ScriptDir\CLAUDE.md") -and (Test-Path "$ScriptDir\.claude\skills") -and ($ScriptDir -ne $Target)) {
     $KitRoot = $ScriptDir
     Write-Host "[OK] Using local kit: $KitRoot" -ForegroundColor DarkGray
+}
+
+# 检测本机 kit 仓库（向上查找或检查常见路径，无需网络）
+if (-not $KitRoot) {
+    $searchPaths = @(
+        (Join-Path (Split-Path -Parent $ScriptDir) "claude-workflow-kit"),
+        "$env:USERPROFILE\claude-workflow-kit",
+        "F:\company\TOOL\claude-workflow-kit"
+    )
+    foreach ($p in $searchPaths) {
+        if ((Test-Path "$p\.mcp.json") -and (Test-Path "$p\CLAUDE.md") -and (Test-Path "$p\.claude\skills")) {
+            $KitRoot = $p
+            Write-Host "[OK] Found local kit repo: $KitRoot" -ForegroundColor DarkGray
+            break
+        }
+    }
 }
 
 # ── 缓存版本显示 ─────────────────────────────────────────
@@ -62,45 +79,47 @@ if ($Update -and -not $KitRoot) {
     }
 }
 
-# 尝试从 GitHub 下载最新版
-if (-not $KitRoot) {
-    Write-Host "[..] Fetching latest kit from GitHub ..." -ForegroundColor Yellow
-    $ZipFile = "$env:TEMP\claude-workflow-kit.zip"
-    $ExtractDir = "$env:TEMP\claude-workflow-kit-extract"
-    $downloadOk = $false
-
+# ── Git Clone 下载（走系统代理，Gitee/GitHub 均可用）────
+function Sync-KitFromGit($GitUrl, $SourceName) {
+    Write-Host "[..] git clone --depth=1 from $SourceName ..." -ForegroundColor Yellow
+    $TempDir = "$env:TEMP\claude-workflow-kit-git"
+    # 清理旧临时目录
+    if (Test-Path $TempDir) { Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue }
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $job = Start-Job -ScriptBlock { param($u, $o) Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing } -ArgumentList $KIT_ZIP, $ZipFile
-        $job | Wait-Job -Timeout 60 | Out-Null
-        if ($job.State -ne 'Completed') { Stop-Job $job; Remove-Job $job; throw "Download timed out" }
-        Remove-Job $job
-        $downloadOk = $true
-    } catch {
-        Write-Host "[WARN] GitHub unreachable: $_" -ForegroundColor Yellow
-    }
-
-    if ($downloadOk) {
-        try {
-            if (Test-Path $ExtractDir) { Remove-Item -Recurse -Force $ExtractDir }
-            Expand-Archive -Path $ZipFile -DestinationPath $ExtractDir -Force
-            $innerDir = Get-ChildItem $ExtractDir -Directory | Select-Object -First 1
-            if (Test-Path $CachedKit) { Remove-Item -Recurse -Force $CachedKit }
-            Copy-Item -Recurse $innerDir.FullName $CachedKit
-            $KitRoot = $CachedKit
-            Remove-Item $ZipFile -Force -ErrorAction SilentlyContinue
-            Remove-Item $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "[OK] Latest kit cached to $KitRoot" -ForegroundColor Green
-        } catch {
-            Write-Host "[WARN] Kit extraction failed: $_" -ForegroundColor Yellow
+        $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+        if (-not $gitCmd) {
+            Write-Host "      [WARN] git not found, cannot clone" -ForegroundColor DarkGray
+            return $false
         }
+        & git clone --depth=1 --single-branch --branch=master "$GitUrl" "$TempDir" 2>&1 | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -eq 0 -and (Test-Path "$TempDir\.mcp.json")) {
+            # 替换缓存
+            if (Test-Path $CachedKit) { Remove-Item -Recurse -Force $CachedKit }
+            Copy-Item -Recurse $TempDir $CachedKit
+            $script:KitRoot = $CachedKit
+            Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+            Write-Host "[OK] Latest kit cached from $SourceName -> $CachedKit" -ForegroundColor Green
+            return $true
+        }
+    } catch {
+        Write-Host "      [WARN] git clone failed: $_" -ForegroundColor DarkGray
+    }
+    # 清理
+    Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+    return $false
+}
+
+# 尝试从 Gitee clone，失败则回退到 GitHub
+if (-not $KitRoot) {
+    if (-not (Sync-KitFromGit $KIT_GIT_REPO "Gitee")) {
+        Sync-KitFromGit $KIT_GIT_REPO_FALLBACK "GitHub" | Out-Null
     }
 
-    # 下载失败 → 检查本地缓存兜底
+    # 下载全部失败 → 检查本地缓存兜底
     if (-not $KitRoot) {
         if ((Test-Path "$CachedKit\.mcp.json") -and (Test-Path "$CachedKit\CLAUDE.md")) {
             $KitRoot = $CachedKit
-            Write-Host "⚠️  GitHub 不可达，使用本地缓存（可能不是最新版）" -ForegroundColor Yellow
+            Write-Host "⚠️  GitHub/Gitee 均不可达，使用本地缓存（可能不是最新版）" -ForegroundColor Yellow
             Show-CacheVersion $CachedKit
             Write-Host "      如需最新版：确保网络可达后，删除缓存重试：" -ForegroundColor Yellow
             Write-Host "      rm -r -fo $CachedKit" -ForegroundColor DarkGray
@@ -111,8 +130,10 @@ if (-not $KitRoot) {
 # 实在没有 → 报错退出
 if (-not $KitRoot) {
     Write-Host "[FAIL] Cannot get kit files." -ForegroundColor Red
-    Write-Host "       No network to GitHub and no local cache found." -ForegroundColor Red
-    Write-Host "       Manual fix: git clone $KIT_REPO" -ForegroundColor Yellow
+    Write-Host "       No network to Gitee or GitHub, and no local cache found." -ForegroundColor Red
+    Write-Host "       Manual fix:" -ForegroundColor Yellow
+    Write-Host "         git clone $KIT_GIT_REPO" -ForegroundColor Yellow
+    Write-Host "         或 git clone $KIT_GIT_REPO_FALLBACK" -ForegroundColor Yellow
     Write-Host "       Then run this script from inside claude-workflow-kit/" -ForegroundColor Yellow
     Read-Host "Press Enter to exit"
     exit 1
@@ -244,7 +265,40 @@ function Safe-CopyDir($SrcDir, $DstDir, $Label) {
 }
 
 # ── 核心配置（跳过已存在，保护用户定制）─────────────────
-Safe-Copy "$KitRoot\CLAUDE.md" "$Target\CLAUDE.md" "CLAUDE.md"
+# ── CLAUDE.md：段落级合并，只补缺失不覆盖 ─────────────
+$srcMd = "$KitRoot\CLAUDE.md"
+$dstMd = "$Target\CLAUDE.md"
+if (-not (Test-Path $dstMd)) {
+    Copy-Item $srcMd $dstMd
+    Write-Host "  ✅ CLAUDE.md" -ForegroundColor Green
+} else {
+    # 提取已有的段落标题
+    $dstSections = Select-String -Path $dstMd -Pattern '^## ' | ForEach-Object { $_.Line.Trim() }
+    $srcSections = Select-String -Path $srcMd -Pattern '^## ' | ForEach-Object { $_.Line.Trim() }
+    $missingSections = $srcSections | Where-Object { $_ -notin $dstSections }
+
+    if ($missingSections.Count -gt 0) {
+        # 对每个缺失的段落，从 kit 提取内容追加到 target
+        $srcContent = Get-Content $srcMd -Raw -Encoding UTF8
+        $added = 0
+        foreach ($section in $missingSections) {
+            $sectionTitle = $section -replace '^## ',''
+            # 提取 kit 中该段落的完整内容（从 ## 标题到下一个 ## 或文件尾）
+            $escaped = [regex]::Escape($section)
+            if ($srcContent -match "${escaped}\s*\n(.*?)(?=\n## |\Z)") {
+                $sectionBody = $matches[0].TrimEnd()
+                # 追加到 target（前面加空行分隔）
+                Add-Content -Path $dstMd -Value "`n`n$sectionBody" -Encoding UTF8
+                $added++
+            }
+        }
+        if ($added -gt 0) {
+            Write-Host "  ✅ CLAUDE.md 已补足 $added 个新段落: $($missingSections -join ', ')" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  🔒 CLAUDE.md 已完善，无需补足" -ForegroundColor Yellow
+    }
+}
 Safe-Copy "$KitRoot\.mcp.json" "$Target\.mcp.json" ".mcp.json"
 
 New-Item -ItemType Directory -Force -Path "$Target\.claude" | Out-Null
@@ -262,8 +316,9 @@ Safe-CopyDir "$KitRoot\.claude\rules" "$Target\.claude\rules" "rules/"
 Safe-CopyDir "$KitRoot\.claude\hooks" "$Target\.claude\hooks" "hooks/"
 
 # ── Skills（只添加新 skill，不覆盖）────────────────────
-if (($KitRoot -ne $Target) -and (Test-Path "$KitRoot\.claude\skills")) {
-    Get-ChildItem "$KitRoot\.claude\skills" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+$skillsSrc = if (Test-Path "$KitRoot\.claude\skills") { "$KitRoot\.claude\skills" } elseif (Test-Path "$CachedKit\.claude\skills") { "$CachedKit\.claude\skills" } else { $null }
+if ($skillsSrc) {
+    Get-ChildItem $skillsSrc -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $skillName = $_.Name
         $dstSkillDir = "$Target\.claude\skills\$skillName"
         if (Test-Path $dstSkillDir) {
@@ -324,8 +379,10 @@ if ($Update) {
 }
 
 # ── .auto-agent/（只添加新文件，永不覆盖已有任务数据）─────
-if (($KitRoot -ne $Target) -and (Test-Path "$KitRoot\.auto-agent")) {
-    Safe-CopyDir "$KitRoot\.auto-agent" "$Target\.auto-agent" ".auto-agent/"
+# 优先从缓存补足，防止 KitRoot=Target 时二次部署漏掉新增目录
+$autoAgentSrc = if (Test-Path "$KitRoot\.auto-agent") { "$KitRoot\.auto-agent" } elseif (Test-Path "$CachedKit\.auto-agent") { "$CachedKit\.auto-agent" } else { $null }
+if ($autoAgentSrc) {
+    Safe-CopyDir $autoAgentSrc "$Target\.auto-agent" ".auto-agent/"
 }
 
 # ── .config/dotnet-tools.json ──────────────────────────

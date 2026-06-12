@@ -20,7 +20,7 @@ export interface ProviderDetection {
 export interface AgentSpawnConfig {
   prompt: string;
   worktreePath: string;
-  model: "opus" | "sonnet" | "haiku";
+  model: "deepseek-v4-pro[1m]" | "deepseek-v4-flash";
   sessionId?: string;
   resume?: string; // resume token
   maxTurns?: number;

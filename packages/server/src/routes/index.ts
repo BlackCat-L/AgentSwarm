@@ -8,11 +8,15 @@ import agentsRouter from "./agents.js";
 import tasksRouter from "./tasks.js";
 import boardRouter from "./board.js";
 import workflowsRouter from "./workflows.js";
+import sortRouter from "./sort.js";
+import healthExtendedRouter from "./health-extended.js";
+import statusExtendedRouter from "./status-extended.js";
 
 const routes = new Hono();
 
 // Health + Status
 routes.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+routes.get("/hello", (c) => c.json({ message: "Hello from Agent Swarm" }));
 routes.get("/status", (c) => c.json({
   server: "Agent Swarm — Dark Factory",
   version: "0.0.0",
@@ -28,14 +32,8 @@ routes.post("/auto", async (c) => {
   const { project_id, title, description } = await c.req.json().catch(() => ({}));
   if (!project_id || !title) return c.json({ error: "project_id 和 title 必需" }, 400);
 
-  const { TaskGraph } = await import("../engine/task-graph.js");
-  const { CapabilityScorer } = await import("../engine/capability-scorer.js");
-  const { RuntimePool } = await import("../engine/runtime-pool.js");
-  const { RateLimiter } = await import("../engine/rate-limiter.js");
-  const { RuntimeCircuitBreaker } = await import("../engine/circuit-breaker.js");
-  const { Orchestrator } = await import("../engine/orchestrator.js");
-
-  const orch = new Orchestrator(new TaskGraph(), new CapabilityScorer(), new RuntimePool(), new RateLimiter(), new RuntimeCircuitBreaker());
+  const { getOrchestrator } = await import("../engine/shared-services.js");
+  const orch = getOrchestrator();
 
   // Quick complexity analysis (returns fast)
   const complexity = await orch.analyzeComplexity(title, description || "");
@@ -59,14 +57,8 @@ routes.post("/orchestrate", async (c) => {
   const { project_id, title, description } = await c.req.json().catch(() => ({}));
   if (!project_id || !title) return c.json({ error: "project_id 和 title 必需" }, 400);
 
-  const { TaskGraph } = await import("../engine/task-graph.js");
-  const { CapabilityScorer } = await import("../engine/capability-scorer.js");
-  const { RuntimePool } = await import("../engine/runtime-pool.js");
-  const { RateLimiter } = await import("../engine/rate-limiter.js");
-  const { RuntimeCircuitBreaker } = await import("../engine/circuit-breaker.js");
-  const { Orchestrator } = await import("../engine/orchestrator.js");
-
-  const orch = new Orchestrator(new TaskGraph(), new CapabilityScorer(), new RuntimePool(), new RateLimiter(), new RuntimeCircuitBreaker());
+  const { getOrchestrator } = await import("../engine/shared-services.js");
+  const orch = getOrchestrator();
   const result = await orch.orchestrate(project_id, title, description || "");
 
   return c.json(result);
@@ -78,5 +70,9 @@ routes.route("/agents", agentsRouter);
 routes.route("/tasks", tasksRouter);
 routes.route("/", boardRouter);          // /api/board, /api/stats, /api/costs, /api/detect, /api/kill-switch, /api/cleanup
 routes.route("/", workflowsRouter);      // /api/workflows, /api/messages, /api/errors
+routes.route("/", workflowsRouter);      // /api/workflows, /api/messages, /api/errors
+routes.route("/sort", sortRouter);       // /api/sort (sorting visualisation)
+routes.route("/api/health-extended", healthExtendedRouter);
+routes.route("/api/status-extended", statusExtendedRouter);
 
 export default routes;

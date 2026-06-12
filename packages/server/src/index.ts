@@ -5,6 +5,7 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { initDb, closeDb } from "./db/connection.js";
 import { migrate } from "./db/migrate.js";
+import { seed } from "./db/seed.js";
 import { errorHandler } from "./middleware/error.js";
 import routes from "./routes/index.js";
 
@@ -13,6 +14,7 @@ const PORT = parseInt(process.env.PORT || "5120", 10);
 // ── Bootstrap ──────────────────────────────────────────────
 await initDb();
 migrate();
+seed();
 
 const app = new Hono();
 

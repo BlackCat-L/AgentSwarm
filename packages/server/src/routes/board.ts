@@ -2,10 +2,10 @@
 
 import { Hono } from "hono";
 import { getDb, saveDb } from "../db/connection.js";
-import { TaskGraph } from "../engine/task-graph.js";
+import { sharedGraph } from "../engine/shared-services.js";
 
 const router = new Hono();
-const graph = new TaskGraph();
+const graph = sharedGraph;
 
 // ── Board ──────────────────────────────────────────────────
 
