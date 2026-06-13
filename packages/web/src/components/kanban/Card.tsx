@@ -3,9 +3,9 @@
 import { useDraggable } from "@dnd-kit/core";
 import type { TaskNode } from "@agent-swarm/shared";
 
-interface Props { task: TaskNode; isOverlay?: boolean; onClick?: () => void }
+interface Props { task: TaskNode; isOverlay?: boolean; onClick?: () => void; agentName?: string }
 
-export function Card({ task, isOverlay, onClick }: Props) {
+export function Card({ task, isOverlay, onClick, agentName }: Props) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id });
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)` } : undefined;
   const pri = ["bg-red-500", "bg-orange-500", "bg-yellow-500", "bg-blue-500", "bg-gray-400"];
