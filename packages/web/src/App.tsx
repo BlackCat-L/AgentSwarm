@@ -22,19 +22,22 @@ export default function App() {
   const { data: status } = useQuery<ServerStatus>({
     queryKey: ["status"], queryFn: () => fetch("/api/status").then(r => r.json()), refetchInterval: 10000,
   });
+  const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: () => fetch("/api/projects").then(r => r.json()) as Promise<any[]> });
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const activeProjectId = selectedProjectId || projects?.[0]?.id || "";
+
   const { data: agents } = useQuery({
-    queryKey: ["agents"], queryFn: () => fetch("/api/agents").then(r => r.json()) as Promise<any[]>, refetchInterval: 10000,
+    queryKey: ["agents", activeProjectId],
+    queryFn: () => fetch(`/api/agents?project_id=${activeProjectId}`).then(r => r.json()) as Promise<any[]>,
+    refetchInterval: 10000,
+    enabled: !!activeProjectId,
   });
   const { data: stats } = useQuery({
-    queryKey: ["stats"], queryFn: () => fetch("/api/stats").then(r => r.json()), refetchInterval: 10000,
+    queryKey: ["stats", activeProjectId],
+    queryFn: () => fetch(`/api/stats?projectId=${activeProjectId}`).then(r => r.json()),
+    refetchInterval: 10000,
+    enabled: !!activeProjectId,
   });
-
-  const PROJECT_ID = agents?.[0]?.project_id || "";
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: () => fetch("/api/projects").then(r => r.json()) as Promise<any[]> });
-
-  // Default to first project, fall back to agent's project
-  const activeProjectId = selectedProjectId || projects?.[0]?.id || PROJECT_ID;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
