@@ -115,9 +115,10 @@ export async function spawnClaudeOnce(
     const rl = createInterface({ input: proc.stdout! });
     proc.stderr!.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf-8");
-      // If stderr contains npm errors, capture them
-      if (text.includes("npm error") || text.includes("ENOENT")) {
-        outputLines.push(`[stderr] ${text.trim()}`);
+      // Capture all stderr — API errors, rate limits, auth failures are here
+      const trimmed = text.trim();
+      if (trimmed) {
+        outputLines.push(`[stderr] ${trimmed}`);
       }
       proc.stdout!.emit("data", chunk);
     });

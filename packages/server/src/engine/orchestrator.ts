@@ -41,7 +41,7 @@ export interface DecompositionResult {
 
 let _spawnModule: any = null;
 
-async function askClaude(prompt: string, model = "deepseek-v4-pro[1m]"): Promise<string> {
+async function askClaude(prompt: string, model = "deepseek-v4-flash"): Promise<string> {
   // Lazy-import to avoid circular deps at module init time
   if (!_spawnModule) {
     _spawnModule = await import("./claude-spawn.js");
@@ -51,9 +51,11 @@ async function askClaude(prompt: string, model = "deepseek-v4-pro[1m]"): Promise
     model,
     timeoutMs: 120_000,
     label: "orchestrator-ask",
-  }, 1); // 1 retry for orchestrator analysis (fast-fail is OK, we fallback)
+  }, 2); // 2 retries for analysis — transient API errors are common
   if (result.success) return result.output;
-  throw new Error(result.error ?? "askClaude failed");
+  // Include stderr output in error for diagnostics
+  const stderr = result.output || "(no output)";
+  throw new Error(`${result.error ?? "askClaude failed"} | stderr: ${stderr.slice(0, 300)}`);
 }
 
 // ── Capability inference (keyword → skill module mapping) ───
@@ -123,18 +125,28 @@ export class Orchestrator {
 任务标题: ${title}
 任务描述: ${description}`;
 
-    const output = await askClaude(prompt);
     try {
-      const json = JSON.parse(output.replace(/```[^]*?```/g, "").trim());
-      return {
-        score: Math.max(1, Math.min(10, json.score ?? 5)),
-        reasoning: json.reasoning ?? "AI 分析",
-        suggestedAgentCount: Math.max(1, Math.min(5, json.suggestedAgentCount ?? 2)),
-        estimatedPhases: json.estimatedPhases ?? [],
-      };
-    } catch {
-      // Fallback to keyword scoring if AI output is malformed
-      return this._fallbackComplexity(title, description);
+      const output = await askClaude(prompt);
+      try {
+        const json = JSON.parse(output.replace(/```[^]*?```/g, "").trim());
+        return {
+          score: Math.max(1, Math.min(10, json.score ?? 5)),
+          reasoning: json.reasoning ?? "AI 分析",
+          suggestedAgentCount: Math.max(1, Math.min(5, json.suggestedAgentCount ?? 2)),
+          estimatedPhases: json.estimatedPhases ?? [],
+        };
+      } catch {
+        // AI output malformed → fallback with raw output snippet
+        const fb = this._fallbackComplexity(title, description);
+        fb.reasoning = `[AI输出解析失败，降级为关键词] ${fb.reasoning} | raw: ${output.slice(0, 100)}`;
+        return fb;
+      }
+    } catch (err: any) {
+      // AI call failed entirely → fallback with error detail
+      const fb = this._fallbackComplexity(title, description);
+      fb.reasoning = `[AI调用失败，降级为关键词] ${fb.reasoning} | 错误: ${err.message?.slice(0, 120) ?? 'unknown'}`;
+      console.error(`[analyzeComplexity] AI call failed: ${err.message?.slice(0, 200)}`);
+      return fb;
     }
   }
 
@@ -170,7 +182,7 @@ export class Orchestrator {
     }
   ],
   "estimatedTotalMinutes": <估计总分钟数>,
-  "recommendedModel": "<deepseek-v4-pro[1m]|deepseek-v4-pro[1m]>"
+  "recommendedModel": "<deepseek-v4-pro[1m]|deepseek-v4-flash>"
 }
 
 规则:
@@ -182,7 +194,7 @@ export class Orchestrator {
 需求标题: ${title}
 需求描述: ${description}`;
 
-    const output = await askClaude(prompt, "deepseek-v4-pro[1m]");
+    const output = await askClaude(prompt);
     try {
       const json = JSON.parse(output.replace(/```[^]*?```/g, "").trim());
       return {
