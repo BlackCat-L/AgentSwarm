@@ -5,9 +5,9 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { Card } from "./Card.js";
 import type { TaskNode, TaskStatus } from "@agent-swarm/shared";
 
-interface Props { status: TaskStatus; label: string; color: string; tasks: TaskNode[]; onTaskClick?: (id: string) => void }
+interface Props { status: TaskStatus; label: string; color: string; tasks: TaskNode[]; onTaskClick?: (id: string) => void; agentMap?: Map<string, string> }
 
-export function Column({ status, label, color, tasks, onTaskClick }: Props) {
+export function Column({ status, label, color, tasks, onTaskClick, agentMap }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
 
   return (
@@ -21,7 +21,7 @@ export function Column({ status, label, color, tasks, onTaskClick }: Props) {
       </div>
       <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
         <div className="space-y-2">
-          {tasks.map(t => <Card key={t.id} task={t} onClick={() => onTaskClick?.(t.id)} />)}
+          {tasks.map(t => <Card key={t.id} task={t} onClick={() => onTaskClick?.(t.id)} agentName={agentMap?.get(t.owner_agent_id || "")} />)}
           {tasks.length === 0 && <div className="text-xs text-slate-400 text-center py-4">暂无</div>}
         </div>
       </SortableContext>

@@ -22,7 +22,7 @@ export function Card({ task, isOverlay, onClick }: Props) {
         </div>
         {task.description && <p className="text-xs text-slate-500 truncate mt-1">{task.description}</p>}
         <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
-          {task.owner_agent_id && <span className="font-mono text-blue-600 text-[10px]">{task.owner_agent_id.slice(0, 8)}</span>}
+          {task.owner_agent_id && <span className="text-blue-600 text-[10px]">{agentName || task.owner_agent_id.slice(0, 8)}</span>}
           {task.required_capabilities.map(c => <span key={c} className="px-1 py-0.5 bg-gray-100 dark:bg-slate-700 rounded text-[10px]">{c}</span>)}
           {task.retry_count > 0 && <span className="text-amber-500">{task.retry_count}/{task.max_retries}</span>}
         </div>

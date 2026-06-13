@@ -28,6 +28,18 @@ export function Board({ projectId }: Props) {
     refetchInterval: 5000,
   });
 
+  const { data: agents } = useQuery({
+    queryKey: ["agents", projectId],
+    queryFn: () => fetch(`/api/agents?project_id=${projectId}`).then(r => r.json()) as Promise<any[]>,
+    refetchInterval: 15000,
+  });
+
+  const agentMap = useMemo(() => {
+    const m = new Map<string, string>();
+    (agents || []).forEach((a: any) => m.set(a.id, a.name));
+    return m;
+  }, [agents]);
+
   const moveMut = useMutation({
     mutationFn: async ({ taskId, newStatus, version }: { taskId: string; newStatus: TaskStatus; version: number }) => {
       const res = await fetch(`/api/tasks/${taskId}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: newStatus, version }) });
@@ -63,7 +75,7 @@ export function Board({ projectId }: Props) {
         selectedIds={[]} onBatchDelete={() => {}} onClearSelection={() => {}} />
       <div className="grid grid-cols-7 gap-3 min-h-[400px]">
         {filtered.map(col => (
-          <Column key={col.status} status={col.status} label={COLUMN_LABELS[col.status]!} color={COLUMN_COLORS[col.status]!} tasks={col.tasks} onTaskClick={setDetailId} />
+          <Column key={col.status} status={col.status} label={COLUMN_LABELS[col.status]!} color={COLUMN_COLORS[col.status]!} tasks={col.tasks} onTaskClick={setDetailId} agentMap={agentMap} />
         ))}
       </div>
       <DragOverlay>{activeTask ? <Card task={activeTask} isOverlay /> : null}</DragOverlay>
