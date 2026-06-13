@@ -141,6 +141,37 @@ function inferCapabilities(title: string, description: string): string[] {
   return caps.length > 0 ? caps : ["architecture"]; // default to architecture
 }
 
+// ── 3-Stage Pipeline: Role Classification ──────────────────
+// Distinguishes Generator (code producer) from Evaluator (code reviewer)
+// to automatically create downstream evaluation tasks.
+
+/** Agent roles that produce code — their output must be evaluated */
+const GENERATOR_ROLES = new Set([
+  "backend-architect", "frontend-developer", "frontend-architect",
+  "database-optimizer", "devops-automator", "ui-designer",
+]);
+
+/** Agent roles that evaluate code — they review/test Generator output */
+const EVALUATOR_ROLES = new Set([
+  "code-reviewer", "testing-qa", "security-engineer",
+]);
+
+/** Agent roles that plan/design — they produce specs, not code, so skip pipeline */
+const PLANNER_ROLES = new Set([
+  "orchestrator", "product-manager", "software-architect",
+]);
+
+/** Minimum complexity score to trigger the 3-stage pipeline */
+const PIPELINE_COMPLEXITY_THRESHOLD = 3;
+
+function isGeneratorRole(role: string): boolean {
+  return GENERATOR_ROLES.has(role);
+}
+
+function isEvaluatorRole(role: string): boolean {
+  return EVALUATOR_ROLES.has(role);
+}
+
 // ── Orchestrator ───────────────────────────────────────────
 
 /** Maximum number of Claude Code processes spawned concurrently */
@@ -397,7 +428,46 @@ export class Orchestrator {
       }
     }
 
-    return { complexity, decomposition, taskIds };
+    // Step 3.5: Create evaluator review tasks for each implementation task
+    const evaluatorTaskIds = this._createReviewTasks(projectId, taskIds);
+    const allTaskIds = [...taskIds, ...evaluatorTaskIds];
+
+    return { complexity, decomposition, taskIds: allTaskIds };
+  }
+
+  /**
+   * Create a paired review task for each implementation task.
+   * Review tasks are assigned to evaluator agents (code-reviewer, testing-qa, security-engineer)
+   * and depend on their parent implementation task.
+   * This ensures the 3-phase Planner→Generator→Evaluator pipeline actually runs.
+   */
+  private _createReviewTasks(projectId: string, implTaskIds: string[]): string[] {
+    const reviewIds: string[] = [];
+    for (const implId of implTaskIds) {
+      const implTask = this.taskGraph.getTask(implId);
+      if (!implTask) continue;
+
+      // Skip if this task is already a review/testing task
+      if (implTask.title.startsWith("Review:")) continue;
+
+      const reviewTask = this.taskGraph.createTask({
+        project_id: projectId,
+        title: `Review: ${implTask.title}`,
+        description: `审查以下任务的产出:\n\n${implTask.title}\n${implTask.description?.slice(0, 500) ?? ""}`,
+        priority: 2, // lower priority than implementation
+        required_capabilities: ["testing"], // matches code-reviewer (testing), testing-qa (testing), security-engineer (security)
+        acceptance_criteria: `验证 ${implTask.title} 的产出满足验收标准`,
+        max_retries: 2,
+      });
+
+      // Review depends on implementation completion
+      this.taskGraph.addDependencies(reviewTask.id, [implId]);
+      reviewIds.push(reviewTask.id);
+    }
+    if (reviewIds.length > 0) {
+      console.log(`[orchestrate] Created ${reviewIds.length} evaluator review tasks`);
+    }
+    return reviewIds;
   }
 
   /** Like orchestrate() but reuses a pre-computed complexity to skip re-analysis */
@@ -428,7 +498,9 @@ export class Orchestrator {
         }
       }
     }
-    return { complexity, decomposition, taskIds };
+    const evaluatorTaskIds = this._createReviewTasks(projectId, taskIds);
+    const allTaskIds = [...taskIds, ...evaluatorTaskIds];
+    return { complexity, decomposition, taskIds: allTaskIds };
   }
 
   // ═══════════════════════════════════════════════════════════
