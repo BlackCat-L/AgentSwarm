@@ -9,9 +9,9 @@ const graph = sharedGraph;
 
 // ── Board ──────────────────────────────────────────────────
 
-// GET /api/board?projectId=xxx
+// GET /api/board?projectId=xxx (empty = all projects)
 router.get("/board", (c) => {
-  const projectId = c.req.query("projectId") || "";
+  const projectId = c.req.query("projectId") || undefined;
   const columns = ["Backlog", "InDev", "ReadyForTest", "InFix", "ReadyForDeploy", "Done", "Blocked"] as const;
 
   const board = columns.map((status) => {
@@ -19,7 +19,7 @@ router.get("/board", (c) => {
     return { status, title: status, tasks };
   });
 
-  return c.json({ projectId, columns: board });
+  return c.json({ projectId: projectId || "", columns: board });
 });
 
 // ── Stats ──────────────────────────────────────────────────

@@ -30,6 +30,11 @@ export default function App() {
   });
 
   const PROJECT_ID = agents?.[0]?.project_id || "";
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const { data: projects } = useQuery({ queryKey: ["projects"], queryFn: () => fetch("/api/projects").then(r => r.json()) as Promise<any[]> });
+
+  // Default to first project, fall back to agent's project
+  const activeProjectId = selectedProjectId || projects?.[0]?.id || PROJECT_ID;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -65,7 +70,7 @@ export default function App() {
               title={dark ? "切换亮色" : "切换暗色"}>
               {dark ? "☀" : "☾"}
             </button>
-            {PROJECT_ID && (
+            {activeProjectId && (
               <button onClick={() => setShowCreate(true)}
                 className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium">
                 N 新建任务
@@ -118,8 +123,17 @@ export default function App() {
 
         {/* Kanban */}
         <section>
-          <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">看板</h2>
-          {PROJECT_ID ? <Board projectId={PROJECT_ID} /> : (
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">看板</h2>
+            {(projects?.length ?? 0) > 1 && (
+              <select value={activeProjectId} onChange={e => setSelectedProjectId(e.target.value)}
+                className="text-xs border border-gray-200 dark:border-slate-600 rounded px-2 py-1 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                <option value="">全部项目</option>
+                {projects?.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            )}
+          </div>
+          {activeProjectId ? <Board projectId={activeProjectId} /> : (
             <div className={card + " p-8 text-center text-sm text-slate-400"}>
               创建项目和 Agent 后看板将在此显示
             </div>
@@ -127,7 +141,7 @@ export default function App() {
         </section>
       </main>
 
-      {showCreate && PROJECT_ID && <TaskCreateModal projectId={PROJECT_ID} onClose={() => setShowCreate(false)} />}
+      {showCreate && activeProjectId && <TaskCreateModal projectId={activeProjectId} onClose={() => setShowCreate(false)} />}
       <TerminalPanel agents={(agents || []).map((a: any) => ({ id: a.id, name: a.name, status: a.status }))} />
     </div>
   );
