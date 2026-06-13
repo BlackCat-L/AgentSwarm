@@ -480,6 +480,68 @@ const STRICT_MODE_BY_ROLE: Record<string, string> = {
 | 复用性 | ≥ 3/5 | 15% |
 
 任一维度低于 threshold → FAIL → 退回 Generator 修复。`,
+
+  // ── Code Reviewer (3-stage pipeline专用) ────────────────────
+  "code-reviewer": `## 严格模式 — 你是 Evaluator（代码审查者）
+
+你是 3-stage pipeline 的评审环节。Generator 已完成代码实现，你的任务是**独立验收代码质量**。
+
+## 你的职责
+- 审查 Generator 产出的每一处改动（文件:行号 + 问题 + 修复建议）
+- 四维评分：功能正确性(40%)、架构合规(25%)、代码质量(20%)、复用性(15%)
+- **不信任 Generator 的自评** — 你独立验证，不依赖 Generator 的结论
+
+## 审查标准
+| 维度 | Hard Threshold | 权重 |
+|------|---------------|------|
+| 功能正确性 | ≥ 4/5 | 40% |
+| 架构合规 | ≥ 3/5 | 25% |
+| 代码质量 | ≥ 3/5 | 20% |
+| 复用性 | ≥ 3/5 | 15% |
+
+## 铁律
+- 任一维度低于阈值 → VERDICT: FAIL → 退回 Generator 修复
+- 每个问题必须附：\`文件:行号\` + 为什么是问题 + 怎么修
+- 反橡皮图章三问：①代码真跑过？②找到至少一个问题？③有没有放水？
+- 禁止自写自审 — 如果自己是代码作者，声明并请求他人审查
+
+## 输出格式
+\`\`\`
+## 审查结论: PASS / FAIL
+## 关键问题（文件:行号 + 原因 + 修复建议）
+## 风格问题
+## 优化建议
+## 评分矩阵 [功能正确性:X/5] [架构合规:X/5] [代码质量:X/5] [复用性:X/5]
+\`\`\``,
+
+  // ── Testing QA (3-stage pipeline专用) ───────────────────────
+  "testing-qa": `## 严格模式 — 你是测试QA专家（端到端验证）
+
+你是 3-stage pipeline 的验证环节。代码已通过审查，你的任务是**端到端验证功能正确性**。
+
+## 你的职责
+- 按验收标准逐条验证功能是否正常工作
+- 覆盖四类路径：正常路径 + 边界值 + 异常输入 + 并发竞争
+- 每个测试用例必须可复现（步骤 + 数据 + 预期结果）
+
+## 验证标准
+- 每条验收标准 → 至少一个测试用例 → PASS/FAIL + 证据
+- "没问题的代码"不叫测试结论，必须有具体证据
+- 发现一个 FAIL 必须深入排查，不放过表面症状
+
+## 铁律
+- 每个测试用例必须可复现（步骤 + 数据 + 预期结果）
+- 反橡皮图章三问：①代码真跑过？②找到至少一个问题？③有没有放水？
+- 测试环境信息必须记录（版本号、配置、测试数据）
+
+## 输出格式
+\`\`\`
+## 测试用例清单 [编号] [描述] [预期结果] [实际结果] [PASS/FAIL]
+## 执行证据（截图/日志/命令行输出）
+## 发现的问题（如有FAIL，深入分析根因）
+## 风险评估
+## 最终判定: PASS / FAIL
+\`\`\``,
 };
 
 /** Map an agent role to its strict-mode category */
@@ -767,6 +829,12 @@ export class ExecutionService {
     const complexity = estimateComplexity(task);
     const useInteractive = complexity >= 3;
 
+    // Update agent status to busy (visible on dashboard)
+    if (agent?.id) {
+      const db = getDb();
+      db.run("UPDATE agents SET status = 'busy' WHERE id = ?", [agent.id]);
+    }
+
     // Use retry-enabled spawn with diagnostics, working in target project
     console.log(`[executeTask] Spawning Claude Code for "${task.title}" (complexity=${complexity}/10, mode=${useInteractive ? "INTERACTIVE" : "PRINT"}, timeout=30min)...`);
     const spawnResult: SpawnResult = await spawnClaudeWithRetry({
@@ -777,6 +845,12 @@ export class ExecutionService {
       cwd: projectCwd,
       useInteractive,
     }, 2);
+
+    // Restore agent to idle
+    if (agent?.id) {
+      const db = getDb();
+      db.run("UPDATE agents SET status = 'idle' WHERE id = ?", [agent.id]);
+    }
 
     console.log(`[executeTask] Spawn result for "${task.title}": success=${spawnResult.success}, output=${spawnResult.output.length} chars, error=${spawnResult.error?.slice(0, 100) ?? "none"}`);
 
@@ -843,10 +917,27 @@ export class ExecutionService {
     // ── Layer 1.5: Skill usage guide (always injected) ──
     p.push(SKILL_USAGE_GUIDE);
 
-    // ── Layer 2: Workflow discipline (complexity-gated) ──
-    if (complexity >= 6) {
+    // ── Layer 2: Workflow discipline (complexity-gated + evaluation task override) ──
+    const role = agent?.role ?? "";
+    const isEvalTask = !!task.parent_task_id && (
+      role === "code-reviewer" || role === "testing-qa" || role === "security-engineer"
+    );
+
+    if (isEvalTask) {
+      // ── 3-Stage Pipeline: Evaluation task → force strict evaluator mode ──
+      // Use role-specific strict mode if available, otherwise generic evaluator
+      const roleStrict = STRICT_MODE_BY_ROLE[role];
+      if (roleStrict) {
+        p.push(roleStrict);
+      } else {
+        const category = strictModeCategory(role);
+        if (category && STRICT_MODE_BY_ROLE[category]) {
+          p.push(STRICT_MODE_BY_ROLE[category]);
+        }
+      }
+      p.push(`\n> ⚠️ 你正在执行 3-stage pipeline 的评估任务。你的结论将决定上游 Generator 任务能否通过。`);
+    } else if (complexity >= 6) {
       // High complexity → strict mode (3-agent separation)
-      const role = agent?.role ?? "";
       const category = strictModeCategory(role);
       if (category && STRICT_MODE_BY_ROLE[category]) {
         p.push(STRICT_MODE_BY_ROLE[category]);
@@ -897,21 +988,55 @@ export class ExecutionService {
     }
 
     // ── Layer 5: Structured output requirement ──
-    p.push(
-      `---`,
-      `## 输出格式（必须包含以下四项）`,
-      `### 改动文件`,
-      `列出每个改动文件的完整路径和改动原因`,
-      ``,
-      `### 验证`,
-      `说明如何验证改动正确（编译/测试/手动）及结果`,
-      ``,
-      `### 遗留问题`,
-      `标注未覆盖的边界情况和已知限制`,
-      ``,
-      `### 建议`,
-      `后续优化方向和需要注意的风险点`
-    );
+    if (isEvalTask) {
+      // Evaluation task output format — reviewer or QA
+      if (role === "code-reviewer") {
+        p.push(
+          `---`,
+          `## 输出格式（必须包含以下内容）`,
+          `### 审查结论: PASS / FAIL`,
+          `### 关键问题（文件:行号 + 原因 + 修复建议）`,
+          `### 风格问题`,
+          `### 优化建议`,
+          `### 评分矩阵 [功能正确性:X/5] [架构合规:X/5] [代码质量:X/5] [复用性:X/5]`
+        );
+      } else if (role === "testing-qa") {
+        p.push(
+          `---`,
+          `## 输出格式（必须包含以下内容）`,
+          `### 测试用例清单 [编号] [描述] [预期结果] [实际结果] [PASS/FAIL]`,
+          `### 执行证据（截图/日志/命令行输出）`,
+          `### 发现的问题（如有FAIL，深入分析根因）`,
+          `### 风险评估`,
+          `### 最终判定: PASS / FAIL`
+        );
+      } else {
+        p.push(
+          `---`,
+          `## 输出格式（必须包含以下四项）`,
+          `### 评估结论: PASS / FAIL`,
+          `### 发现清单（具体证据）`,
+          `### 遗留问题`,
+          `### 建议`
+        );
+      }
+    } else {
+      p.push(
+        `---`,
+        `## 输出格式（必须包含以下四项）`,
+        `### 改动文件`,
+        `列出每个改动文件的完整路径和改动原因`,
+        ``,
+        `### 验证`,
+        `说明如何验证改动正确（编译/测试/手动）及结果`,
+        ``,
+        `### 遗留问题`,
+        `标注未覆盖的边界情况和已知限制`,
+        ``,
+        `### 建议`,
+        `后续优化方向和需要注意的风险点`
+      );
+    }
 
     return p.join("\n");
   }
