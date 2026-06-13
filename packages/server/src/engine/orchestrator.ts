@@ -479,6 +479,37 @@ export class Orchestrator {
     // ── Set dependency: QA task depends on review task ──
     this.taskGraph.addDependencies(qaTask.id, [reviewTask.id]);
 
+    // ── Create security review task (only for security-sensitive tasks) ──
+    const caps = (generatorTask.required_capabilities as string[]) ?? [];
+    const needsSecurityReview = caps.includes("security")
+      || /auth|login|password|token|权限|认证|安全|加密|密钥|注入|XSS|CSRF/i.test(generatorTask.title + (generatorTask.description || ""));
+    if (needsSecurityReview) {
+      const securityAgent = this._findAgentByRole(allAgents, "security-engineer");
+      if (securityAgent) {
+        const securityTask = this.taskGraph.createTask({
+          project_id: generatorTask.project_id,
+          title: `Security Review: ${generatorTask.title}`,
+          description: `## 评估任务: 安全审查\n\n`
+            + `**审查对象:** ${generatorTask.title}\n\n`
+            + `**审查标准:** 威胁面扫描——输入点、权限点、数据暴露点、依赖漏洞。`
+            + `五类检查：注入攻击、越权访问、敏感数据泄露、依赖漏洞、配置暴露。`
+            + `每个发现附：风险等级 + 攻击场景 + 修复方案。\n\n`
+            + `---\n### 审查上下文\n${evalContext}`,
+          priority: 1,
+          required_capabilities: ["security"],
+          acceptance_criteria: `安全审查通过：无高危漏洞，中危漏洞已记录修复方案。`
+            + `敏感数据不落盘、不硬编码、不打印日志。`,
+          max_retries: 2,
+          parent_task_id: generatorTask.id,
+        });
+        const assignedSec = this.taskGraph.assignTask(securityTask.id, securityAgent.id, securityTask.version);
+        if (assignedSec) {
+          this.taskGraph.addDependencies(securityTask.id, [reviewTask.id]);
+          console.log(`  - Security: ${securityTask.id.slice(0, 8)} → security-engineer (${securityAgent.name})`);
+        }
+      }
+    }
+
     console.log(`[Pipeline] Created evaluation tasks for "${generatorTask.title}":`);
     console.log(`  - Review:  ${reviewTask.id.slice(0, 8)} → code-reviewer (${reviewerAgent.name})`);
     console.log(`  - QA:      ${qaTask.id.slice(0, 8)} → testing-qa (${qaAgent.name}) [depends on review]`);
