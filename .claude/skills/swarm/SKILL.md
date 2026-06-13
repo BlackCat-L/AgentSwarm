@@ -32,33 +32,48 @@ triggers:
 
 ### Step 1: 获取或创建项目（自动识别当前项目路径）
 
+**绝对不允许使用已有项目代替！必须严格匹配 CWD。**
+
 ```bash
 python3 -c "
-import urllib.request, json, os
+import urllib.request, json, os, sys
 
-# Auto-detect current project path
 cwd = os.getcwd()
 name = os.path.basename(cwd)
-
-# Check if project already registered for this path
-proj_list = json.loads(urllib.request.urlopen('http://localhost:5120/api/projects').read())
 pid = None
+
+# First: exact path match ONLY — never fallback to other projects
+proj_list = json.loads(urllib.request.urlopen('http://localhost:5120/api/projects').read())
 for p in proj_list:
     if p.get('path') == cwd:
         pid = p['id']
-        print(f'EXISTING:{pid}:{cwd}')
         break
 
-if not pid:
-    # Create new project with actual path
+if pid:
+    print(f'PROJECT_ID={pid}')
+    print(f'PATH={cwd}')
+else:
+    # Create new project — must succeed, no fallback
     data = json.dumps({'name': name, 'path': cwd}, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request('http://localhost:5120/api/projects', data=data, method='POST')
     req.add_header('Content-Type', 'application/json; charset=utf-8')
-    resp = json.loads(urllib.request.urlopen(req).read())
-    pid = resp['id']
-    print(f'CREATED:{pid}:{cwd}')
+    try:
+        resp = json.loads(urllib.request.urlopen(req).read())
+        pid = resp.get('id')
+        if pid:
+            print(f'PROJECT_ID={pid}')
+            print(f'PATH={cwd}')
+        else:
+            print(f'ERROR: no id in response: {resp}')
+            sys.exit(1)
+    except Exception as e:
+        print(f'ERROR: failed to create project: {e}')
+        print(f'CWD: {cwd}')
+        sys.exit(1)
 "
 ```
+
+> **铁律**：`PROJECT_ID` 必须从输出中提取，格式为 `PROJECT_ID=<uuid>`。没有这个值不能继续。禁止使用任何其他 project_id。
 
 ### Step 2: 确保有 Agent
 
