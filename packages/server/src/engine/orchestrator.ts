@@ -261,24 +261,38 @@ export class Orchestrator {
           recommendedModel: json.recommendedModel ?? "deepseek-v4-pro[1m]",
         };
       } catch {
-        // JSON extraction failed — single task with inferred caps
-        console.error(`[decomposeTask] JSON extraction failed, output: ${output.slice(0, 200)}`);
-        return {
-          subTasks: [{ title, description, requiredCapabilities: inferCapabilities(title, description), dependsOn: [], acceptanceCriteria: "" }],
-          estimatedTotalMinutes: 15,
-          recommendedModel: "deepseek-v4-pro[1m]",
-        };
+        console.error(`[decomposeTask] JSON extraction failed, using phase-based fallback`);
+        return this._phaseBasedFallback(title, description, complexity);
       }
     } catch (err: any) {
-      // AI call failed entirely
       console.error(`[decomposeTask] AI call failed: ${err.message?.slice(0, 200)}`);
-      return {
-        subTasks: [{ title, description, requiredCapabilities: inferCapabilities(title, description), dependsOn: [], acceptanceCriteria: "" }],
-        estimatedTotalMinutes: 15,
-        recommendedModel: "deepseek-v4-pro[1m]",
-      };
+      return this._phaseBasedFallback(title, description, complexity);
     }
   }
+
+  /** Fallback: use complexity phases as task structure when AI decomposition fails */
+  private _phaseBasedFallback(title: string, description: string, complexity: ComplexityReport): DecompositionResult {
+    const phases = complexity.estimatedPhases.length > 0
+      ? complexity.estimatedPhases
+      : ["implementation"];
+
+    console.log(`[decomposeTask] Phase fallback: ${phases.length} phases -> ${phases.join(", ")}`);
+
+    const subTasks = phases.map((phaseName, i) => ({
+      title: `[${phaseName}] ${title}`,
+      description: `Phase: ${phaseName}\n\n${description}\n\nPhase "${phaseName}" task.`,
+      requiredCapabilities: inferCapabilities(title, `${description} ${phaseName}`),
+      dependsOn: i > 0 ? [i - 1] : [],
+      acceptanceCriteria: `Phase ${phaseName} completed and verified`,
+    }));
+
+    return {
+      subTasks,
+      estimatedTotalMinutes: phases.length * 10,
+      recommendedModel: complexity.score >= 7 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash",
+    };
+  }
+
 
   // ═══════════════════════════════════════════════════════════
   // 3️⃣  契约传递 — 上游输出 → 下游输入上下文注入
