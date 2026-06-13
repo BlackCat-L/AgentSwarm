@@ -50,6 +50,23 @@ packages/server/*.py
 # ── Generated ───────────────────────────────────────────
 .auto-agent/gen-tasks.js
 
+# ── Trash/backup DB files ───────────────────────────────
+*.trash
+*.prev
+*.prev2
+.trash-*
+
+# ── Temp fix scripts ─────────────────────────────────────
+packages/server/new-strict-mode.txt
+packages/server/apply-fix.py
+packages/server/apply-spawn-fix.py
+
+# ── Agent swarm test artifacts ───────────────────────────
+packages/server/src/routes/health-extended.ts
+packages/server/src/routes/status-extended.ts
+packages/server/subtasks.json
+packages/server/tmp/
+
 # ── Misc ────────────────────────────────────────────────
 *.log
 .tmp/
