@@ -171,12 +171,13 @@ export class Orchestrator {
 
   async analyzeComplexity(title: string, description: string): Promise<ComplexityReport> {
     const prompt = `分析以下软件任务的复杂度。返回纯 JSON（不要 markdown 代码块）。
+**输出语言：简体中文。** reasoning 用中文写，estimatedPhases 用中文。
 
 {
   "score": <1-10>,
-  "reasoning": "<为什么是这个分数，一句话>",
+  "reasoning": "<为什么是这个分数，中文一句话>",
   "suggestedAgentCount": <建议几个agent并行>,
-  "estimatedPhases": ["需要哪些阶段，如: backend, frontend, database, testing, devops"]
+  "estimatedPhases": ["需要哪些阶段，中文描述，如: 前端UI、数据层、测试验证"]
 }
 
 任务标题: ${title}
@@ -215,8 +216,8 @@ export class Orchestrator {
   ): Promise<DecompositionResult> {
     const prompt = `你是一个软件架构师。把以下需求拆解成具体的子任务。
 返回纯 JSON（不要 markdown 代码块）。
+**输出语言：简体中文。** 标题、描述、验收标准全部用中文写。
 
-能力标签必须从以下 5 个标签中选择（可多选，不要自己编造）:
 能力标签必须从以下 5 个标签中选择（可多选，不要自己编造）:
 - frontend      (前端/UI/组件/样式/交互)
 - architecture  (架构设计/后端逻辑/API/数据库/DevOps/模块划分)
@@ -229,7 +230,7 @@ export class Orchestrator {
     {
       "title": "子任务标题",
       "description": "详细描述（包含具体要做什么、涉及哪些文件）",
-      "requiredCapabilities": ["backend", "database"],
+      "requiredCapabilities": ["frontend"],
       "dependsOn": [0],
       "acceptanceCriteria": "可验证的完成标准"
     }
@@ -399,6 +400,37 @@ export class Orchestrator {
     return { complexity, decomposition, taskIds };
   }
 
+  /** Like orchestrate() but reuses a pre-computed complexity to skip re-analysis */
+  private async _orchestrateWithComplexity(
+    projectId: string, title: string, description: string, complexity: ComplexityReport
+  ): Promise<{ complexity: ComplexityReport; decomposition: DecompositionResult; taskIds: string[] }> {
+    const decomposition = await this.decomposeTask(title, description, complexity);
+    const taskIds: string[] = [];
+    const idMap = new Map<number, string>();
+    for (let i = 0; i < decomposition.subTasks.length; i++) {
+      const st = decomposition.subTasks[i]!;
+      const task = this.taskGraph.createTask({
+        project_id: projectId, title: st.title, description: st.description,
+        priority: i === 0 ? 0 : 1,
+        required_capabilities: st.requiredCapabilities,
+        acceptance_criteria: st.acceptanceCriteria, max_retries: 3,
+      });
+      taskIds.push(task.id);
+      idMap.set(i, task.id);
+    }
+    for (let i = 0; i < decomposition.subTasks.length; i++) {
+      const st = decomposition.subTasks[i]!;
+      if (st.dependsOn.length > 0) {
+        const depIds = st.dependsOn.map(idx => idMap.get(idx)).filter((id): id is string => id !== undefined);
+        if (depIds.length > 0) {
+          const tId = idMap.get(i);
+          if (tId) this.taskGraph.addDependencies(tId, depIds);
+        }
+      }
+    }
+    return { complexity, decomposition, taskIds };
+  }
+
   // ═══════════════════════════════════════════════════════════
   // 5️⃣  全自动执行 — 输入需求 → 自动拆解 → 分配 → 并行执行 → 完成
   // ═══════════════════════════════════════════════════════════
@@ -409,7 +441,8 @@ export class Orchestrator {
    * Returns when all tasks are Done or some are Blocked.
    */
   async autoExecute(
-    projectId: string, title: string, description: string
+    projectId: string, title: string, description: string,
+    precomputedComplexity?: ComplexityReport
   ): Promise<{
     complexity: ComplexityReport;
     decomposition: DecompositionResult;
@@ -417,8 +450,10 @@ export class Orchestrator {
     completed: number;
     blocked: number;
   }> {
-    // Step 1-3: orchestrate
-    const plan = await this.orchestrate(projectId, title, description);
+    // Step 1-3: orchestrate — skip re-analysis if complexity already computed
+    const plan = precomputedComplexity
+      ? await this._orchestrateWithComplexity(projectId, title, description, precomputedComplexity)
+      : await this.orchestrate(projectId, title, description);
 
     // Step 4: Auto-assign agents to all tasks
     const { ExecutionService } = await import("./execution-service.js");
@@ -444,6 +479,8 @@ export class Orchestrator {
     const remaining = new Set(plan.taskIds);
     let completed = 0;
     let blocked = 0;
+    let idleLoops = 0;
+    const MAX_IDLE_LOOPS = 30; // 30 * 2s = 60s max wait
 
     while (remaining.size > 0) {
       const ready = [...remaining].filter(id => {
@@ -456,9 +493,28 @@ export class Orchestrator {
       });
 
       if (ready.length === 0) {
+        idleLoops++;
+        if (idleLoops >= MAX_IDLE_LOOPS) {
+          // Deadlock detection: tasks stuck in non-InDev states
+          const stuck = [...remaining].map(id => {
+            const t = this.taskGraph.getTask(id);
+            return t ? `${t.title.slice(0,30)}(${t.status})` : `${id}(gone)`;
+          });
+          console.error(`[autoExecute] Deadlock after ${idleLoops} idle loops. Stuck tasks: ${stuck.join(", ")}`);
+          for (const id of remaining) {
+            const t = this.taskGraph.getTask(id);
+            if (t && t.status === "Backlog") {
+              // Re-attempt assignment for stuck backlog tasks
+              const agent = this.selectBestAgent(allAgents, t.required_capabilities, projectId);
+              if (agent) this.taskGraph.assignTask(id, agent, t.version);
+            }
+          }
+          idleLoops = 0; // reset counter after recovery attempt
+        }
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
+      idleLoops = 0; // reset on activity
 
       // Execute ready InDev tasks with concurrency limit.
       // MAX_CONCURRENT_SPAWNS prevents spawn-storm → API rate-limit → crash (exit -1).

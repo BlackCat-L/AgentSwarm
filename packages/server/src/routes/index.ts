@@ -70,7 +70,8 @@ routes.post("/auto", async (c) => {
   const complexity = await orch.analyzeComplexity(title, description || "");
 
   // Start full auto-execute in background (may take minutes)
-  orch.autoExecute(project_id, title, description || "").then(result => {
+  // Pass pre-computed complexity to avoid redundant (potentially failing) re-analysis
+  orch.autoExecute(project_id, title, description || "", complexity).then(result => {
     console.log(`[Auto] "${title}": ${result.completed} done, ${result.blocked} blocked`);
   }).catch(err => {
     console.error(`[Auto] "${title}" failed:`, err.message);
