@@ -31,7 +31,7 @@ export interface ProjectConfig {
   /** 默认运行时 */
   defaultRuntime?: "claude-code" | "hermes" | "openclaw";
   /** 默认模型 */
-  defaultModel?: "deepseek-v4-pro[1m]" | "deepseek-v4-flash";
+  defaultModel?: "deepseek-v4-pro[1m]" | "deepseek-v4-pro[1m]";
   /** 通知 webhook URL */
   webhookUrl?: string;
 }

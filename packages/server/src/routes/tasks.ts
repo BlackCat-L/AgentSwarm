@@ -211,7 +211,7 @@ router.post("/:id/execute", async (c) => {
   const executor = new ExecutionService(graph);
 
   try {
-    const model = c.req.query("model") || "deepseek-v4-flash";
+    const model = c.req.query("model") || "deepseek-v4-pro[1m]";
     const result = await executor.executeTask(id, model);
     return c.json({
       taskId: id,

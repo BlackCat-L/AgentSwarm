@@ -37,55 +37,55 @@ export interface DecompositionResult {
 }
 
 // ── Helper: call Claude Code for structured thinking ────────
+// Uses spawnClaudeWithRetry for transient failure resilience.
 
-function resolveClaudeBin(): string {
-  // On Windows, spawn claude.exe directly to avoid cmd.exe shell
-  // which corrupts UTF-8 through the system codepage (GBK/CP936).
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || "";
-    // Build path with OS-native separators
-    const sep = process.platform === "win32" ? "\\" : "/";
-    return [appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"].join(sep);
+let _spawnModule: any = null;
+
+async function askClaude(prompt: string, model = "deepseek-v4-pro[1m]"): Promise<string> {
+  // Lazy-import to avoid circular deps at module init time
+  if (!_spawnModule) {
+    _spawnModule = await import("./claude-spawn.js");
   }
-  return "claude";
+  const result = await _spawnModule.spawnClaudeWithRetry({
+    prompt,
+    model,
+    timeoutMs: 120_000,
+    label: "orchestrator-ask",
+  }, 1); // 1 retry for orchestrator analysis (fast-fail is OK, we fallback)
+  if (result.success) return result.output;
+  throw new Error(result.error ?? "askClaude failed");
 }
 
-async function askClaude(prompt: string, model = "deepseek-v4-flash"): Promise<string> {
-  const { spawn } = await import("node:child_process");
-  const { createInterface } = await import("node:readline");
-  const bin = resolveClaudeBin();
-  return new Promise((resolve, reject) => {
-    const execEnv = { ...process.env };
-    delete execEnv.ANTHROPIC_MODEL;
-    delete execEnv.ANTHROPIC_SMALL_FAST_MODEL;
+// ── Capability inference (keyword → skill module mapping) ───
+// Used when AI decomposition fails, so tasks still get skill injection.
 
-    const proc = spawn(bin, ["-p", "--output-format", "stream-json", "--verbose", "--model", model], {
-      env: execEnv, stdio: ["pipe", "pipe", "pipe"],
-    });
-    const lines: string[] = [];
-    proc.on("error", (err: NodeJS.ErrnoException) => {
-      console.error(`[askClaude] spawn error (${bin}): ${err.code} — ${err.message}`);
-      reject(err);
-    });
-    const rl = createInterface({ input: proc.stdout! });
-    proc.stderr!.on("data", (c: Buffer) => proc.stdout!.emit("data", c));
-    rl.on("line", (line: string) => {
-      try { const m = JSON.parse(line); if (m.type === "assistant") {
-        (m.message?.content ?? []).filter((b: any) => b.type === "text").forEach((b: any) => lines.push(b.text));
-      }} catch {}
-    });
-    proc.on("exit", (c) => c === 0 ? resolve(lines.join("\n")) : reject(new Error(`exit ${c}`)));
-    // Guard: stdin may be null if spawn failed before pipes established
-    if (proc.stdin) {
-      proc.stdin.end(Buffer.from(prompt, "utf-8"));
-    } else {
-      reject(new Error("Claude Code process failed to start (no stdin)"));
+const CAPABILITY_KEYWORDS: Array<{ cap: string; keywords: RegExp[] }> = [
+  { cap: "database",   keywords: [/数据库|database|表|table|sql|migration|迁移|索引|index|查询|query|存储|store/i] },
+  { cap: "api",        keywords: [/api|接口|端点|endpoint|rest|路由|route|请求|request|响应|response/i] },
+  { cap: "backend",    keywords: [/后端|backend|服务端|server|逻辑|logic|业务|business|处理|handler/i] },
+  { cap: "frontend",   keywords: [/前端|frontend|ui|界面|页面|page|组件|component|react|vue|样式|css|html/i] },
+  { cap: "security",   keywords: [/安全|security|认证|auth|登录|login|注册|register|密码|password|token|jwt|权限|permission|加密|encrypt|哈希|hash/i] },
+  { cap: "testing",    keywords: [/测试|test|单元测试|unit test|验证|verify|断言|assert|mock|qa/i] },
+  { cap: "devops",     keywords: [/部署|deploy|构建|build|ci|cd|docker|容器|环境|env|配置|config|脚本|script/i] },
+  { cap: "performance",keywords: [/性能|performance|优化|optimize|缓存|cache|加速|加速|速度|speed|慢|slow/i] },
+  { cap: "architecture",keywords: [/架构|architect|设计|design|模块|module|系统|system|模式|pattern|重构|refactor/i] },
+];
+
+function inferCapabilities(title: string, description: string): string[] {
+  const text = `${title} ${description}`;
+  const caps: string[] = [];
+  for (const { cap, keywords } of CAPABILITY_KEYWORDS) {
+    if (keywords.some(k => k.test(text))) {
+      caps.push(cap);
     }
-    setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, 120_000);
-  });
+  }
+  return caps.length > 0 ? caps : ["backend"]; // default to backend if nothing matches
 }
 
 // ── Orchestrator ───────────────────────────────────────────
+
+/** Maximum number of Claude Code processes spawned concurrently */
+const MAX_CONCURRENT_SPAWNS = 3;
 
 export class Orchestrator {
   private taskGraph: TaskGraph;
@@ -170,7 +170,7 @@ export class Orchestrator {
     }
   ],
   "estimatedTotalMinutes": <估计总分钟数>,
-  "recommendedModel": "<deepseek-v4-pro[1m]|deepseek-v4-flash>"
+  "recommendedModel": "<deepseek-v4-pro[1m]|deepseek-v4-pro[1m]>"
 }
 
 规则:
@@ -194,14 +194,20 @@ export class Orchestrator {
           acceptanceCriteria: t.acceptanceCriteria ?? "",
         })),
         estimatedTotalMinutes: json.estimatedTotalMinutes ?? 30,
-        recommendedModel: json.recommendedModel ?? "deepseek-v4-flash",
+        recommendedModel: json.recommendedModel ?? "deepseek-v4-pro[1m]",
       };
     } catch {
-      // Fallback: single task
+      // Fallback: single task, infer capabilities from content
       return {
-        subTasks: [{ title, description, requiredCapabilities: [], dependsOn: [], acceptanceCriteria: "" }],
+        subTasks: [{
+          title,
+          description,
+          requiredCapabilities: inferCapabilities(title, description),
+          dependsOn: [],
+          acceptanceCriteria: "",
+        }],
         estimatedTotalMinutes: 15,
-        recommendedModel: "deepseek-v4-flash",
+        recommendedModel: "deepseek-v4-pro[1m]",
       };
     }
   }
@@ -370,15 +376,26 @@ export class Orchestrator {
         continue;
       }
 
-      // Execute ready InDev tasks in parallel (with agent context + role prompt)
-      const results = await Promise.allSettled(
-        ready.map(taskId => {
-          const task = this.taskGraph.getTask(taskId);
-          const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
-          const model = agent?.model || "deepseek-v4-flash";
-          return executor.executeTask(taskId, model, agent).catch(e => ({ success: false, output: "", error: e.message }));
-        })
-      );
+      // Execute ready InDev tasks with concurrency limit.
+      // MAX_CONCURRENT_SPAWNS prevents spawn-storm → API rate-limit → crash (exit -1).
+      const results: Array<{ status: string; value?: any; reason?: any }> = [];
+      for (let i = 0; i < ready.length; i += MAX_CONCURRENT_SPAWNS) {
+        const batch = ready.slice(i, i + MAX_CONCURRENT_SPAWNS);
+        const batchResults = await Promise.allSettled(
+          batch.map(taskId => {
+            const task = this.taskGraph.getTask(taskId);
+            const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
+            const model = agent?.model || "deepseek-v4-pro[1m]";
+            // If agent has a lighter model configured, use it; otherwise default
+            return executor.executeTask(taskId, model, agent).catch(e => ({ success: false, output: "", error: e.message }));
+          })
+        );
+        results.push(...batchResults);
+        // Brief inter-batch pause to let API rate-limit bucket refill
+        if (i + MAX_CONCURRENT_SPAWNS < ready.length) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
 
       // Process results + run quality gates for each completed execution
       for (let i = 0; i < ready.length; i++) {

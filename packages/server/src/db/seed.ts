@@ -5,18 +5,20 @@ import { getDb, saveDb } from "./connection.js";
 import { v4 as uuidv4 } from "uuid";
 
 const DEFAULT_TEAM: Array<{ name: string; role: string; model: "deepseek-v4-pro[1m]" | "deepseek-v4-flash" }> = [
+  // ── Heavy roles — need deep analysis, pro model ──
   { name: "编排官",       role: "orchestrator",          model: "deepseek-v4-pro[1m]" },
   { name: "产品经理",     role: "product-manager",       model: "deepseek-v4-pro[1m]" },
   { name: "软件架构师",   role: "software-architect",    model: "deepseek-v4-pro[1m]" },
-  { name: "UI设计师",     role: "ui-designer",           model: "deepseek-v4-flash" },
-  { name: "数据库优化师", role: "database-optimizer",    model: "deepseek-v4-pro[1m]" },
   { name: "后端架构师",   role: "backend-architect",     model: "deepseek-v4-pro[1m]" },
-  { name: "前端开发",     role: "frontend-developer",    model: "deepseek-v4-flash" },
   { name: "前端架构师",   role: "frontend-architect",    model: "deepseek-v4-pro[1m]" },
-  { name: "DevOps自动化", role: "devops-automator",      model: "deepseek-v4-flash" },
-  { name: "测试QA",       role: "testing-qa",            model: "deepseek-v4-flash" },
+  { name: "数据库优化师", role: "database-optimizer",    model: "deepseek-v4-pro[1m]" },
   { name: "安全工程师",   role: "security-engineer",     model: "deepseek-v4-pro[1m]" },
   { name: "代码审查师",   role: "code-reviewer",         model: "deepseek-v4-pro[1m]" },
+  // ── Light roles — implementation/validation, flash is sufficient ──
+  { name: "UI设计师",     role: "ui-designer",           model: "deepseek-v4-flash" },
+  { name: "前端开发",     role: "frontend-developer",    model: "deepseek-v4-flash" },
+  { name: "DevOps自动化", role: "devops-automator",      model: "deepseek-v4-flash" },
+  { name: "测试QA",       role: "testing-qa",            model: "deepseek-v4-flash" },
 ];
 
 export function seed(): void {

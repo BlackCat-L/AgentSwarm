@@ -1,10 +1,11 @@
 // ── Execution Service — task → Claude Code → output ───────
 
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import { existsSync } from "node:fs";
+
+import type { ChildProcess } from "node:child_process";
 import { TaskGraph } from "./task-graph.js";
-import { eventBus } from "../sse/event-bus.js";
+import { getDb } from "../db/connection.js";
+import { spawnClaudeWithRetry, resolveClaudeBin, claudeBinAvailable } from "./claude-spawn.js";
+import type { SpawnResult } from "./claude-spawn.js";
 import type { TaskNode, AgentInstance } from "@agent-swarm/shared";
 
 interface ExecutionResult {
@@ -13,21 +14,20 @@ interface ExecutionResult {
   error?: string;
 }
 
-function resolveClaudeBin(): string {
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || "";
-    const sep = "\\";
-    return [appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"].join(sep);
-  }
-  return "claude";
-}
-
-/** Verify the Claude Code binary exists — prevents cryptic spawn ENOENT errors */
-function claudeBinAvailable(): boolean {
-  const bin = resolveClaudeBin();
-  // On non-Windows, "claude" is resolved via PATH — just check it's findable
-  if (process.platform !== "win32") return true; // spawn will report if missing
-  return existsSync(bin);
+/** Resolve the working directory for a task's project */
+function resolveProjectCwd(projectId: string): string {
+  try {
+    const db = getDb();
+    const stmt = db.prepare("SELECT path FROM projects WHERE id = ?");
+    stmt.bind([projectId]);
+    if (stmt.step()) {
+      const row = stmt.getAsObject() as { path: string };
+      stmt.free();
+      return row.path || process.cwd();
+    }
+    stmt.free();
+  } catch {}
+  return process.cwd();
 }
 
 // ── Role-skill injection: each agent is a domain master ──
@@ -349,37 +349,72 @@ const ROLE_SKILL_INJECTION: Record<string, string> = {
 \`\`\``,
 };
 
+// ── Available skills reference (injected into every prompt) ──
+const SKILL_USAGE_GUIDE = `
+## 可用 Skills（必须主动调用，不是装饰！）
+
+你有以下 skills 可用。遇到匹配场景时，**用 Skill 工具主动调用**，不要自己硬写：
+
+| 场景 | 调用 Skill | 触发条件 |
+|------|-----------|---------|
+| 代码审查 | \`Skill("code-review")\` | 完成任何代码改动后 |
+| 安全审查 | \`Skill("security-review")\` | 涉及 auth/data/input 改动 |
+| 代码简化 | \`Skill("simplify")\` | 代码完成，检查冗余 |
+| Git 操作 | \`Skill("git")\` | commit/branch/merge/PR |
+| 流程图/架构图 | \`Skill("mermaid")\` | 画流程/架构/时序/ER 图 |
+| 思维导图 | \`Skill("huo15-mind-map")\` | 头脑风暴/知识整理 |
+| 网络搜索 | \`Skill("tavily")\` | 查资料/调研/最新信息 |
+| 文档提取 | \`Skill("moark-doc-extraction")\` | 读取 PDF/DOCX |
+| 提示词优化 | \`Skill("prompt-optimizer")\` | 优化 prompt/指令 |
+| 产品设计 | \`Skill("game-designer-toolkit")\` | 策划案/GDD/系统设计 |
+| Agent 配置 | \`Skill("agent-md-advisor")\` | 写 CLAUDE.md/AGENTS.md |
+| 任务分解 | \`Skill("auto-agent")\` | 复杂多步骤任务 |
+
+**规则：Skill 调用不是可选项。遇到上表场景不调用 Skill = 漏步骤 = Bug。**
+`;
+
 // ── Auto-Agent 6-step workflow (injected for complex tasks) ──
 const AUTO_AGENT_WORKFLOW = `
 ## 执行纪律（Auto-Agent 6步法）
 
 你必须严格遵循以下流程，不跳过任何步骤：
 
+### Step 0: 判断是否需要 Skill
+- 先检查「可用 Skills」表，匹配到场景就调用 Skill
+- 不确定时宁可多调用，不错过
+
 ### Step 1: 分析
 - 通读任务描述和验收标准
 - 找到项目中相关的已有代码，理解模式
 - 确认影响范围和依赖关系
+- 涉及安全/认证/权限 → 调用 \`Skill("security-review")\`
 
 ### Step 2: 设计
 - 列出涉及的文件（完整路径）
 - 设计接口/组件签名
 - 如有不确定，明确标注假设
+- 复杂架构 → 调用 \`Skill("mermaid")\` 画图
+- 需要产品决策 → 调用 \`Skill("game-designer-toolkit")\` 或 \`Skill("pm-perspective")\`
 
 ### Step 3: 实现
 - 逐步编码，每步小而聚焦
 - 遵循项目已有代码模式和命名规范
 - 优先复用已有模块，不重复造轮子
+- 涉及 Git → 调用 \`Skill("git")\`
+- 读外部文档/PDF → 调用 \`Skill("moark-doc-extraction")\`
 
 ### Step 4: 验证（禁止跳过）
 - 编译/语法检查必须通过
 - 核心逻辑必须有测试覆盖
 - 如有UI改动，必须实际运行验证
 - 不测试 = 不算完成
+- 代码改动完成后 → 必须调用 \`Skill("code-review")\` 或 \`Skill("simplify")\`
 
 ### Step 5: 记录
 - 输出改动文件清单（完整路径）
 - 说明每个文件改了什么、为什么
 - 如有遗留问题，明确标注
+- 新建设计文档 → 调用 \`Skill("agent-md-advisor")\`
 
 ### Step 6: 交棒
 - 总结本次改动的核心决策
@@ -397,23 +432,44 @@ const AUTO_AGENT_WORKFLOW = `
 **禁止在阻塞时谎报完成。**
 `;
 
-// ── Strict Mode (3-agent separation, for complexity >= 6) ──
-const STRICT_MODE_WORKFLOW = `
-## 严格模式（3角色分离）
+// ── Role-specific strict mode fragments ────────────────────
+// Instead of a single generic "3-role" prompt, each agent gets a strict-mode
+// overlay that matches its actual role in the 12-agent swarm.
+// Planner/Generator/Evaluator map to real agent roles:
+//   Planner   → orchestrator, product-manager, software-architect
+//   Generator → backend-architect, frontend-developer, frontend-architect,
+//               database-optimizer, devops-automator, ui-designer
+//   Evaluator → code-reviewer, testing-qa, security-engineer
 
-本次任务复杂度高，你必须执行三角色分离：
+const STRICT_MODE_BY_ROLE: Record<string, string> = {
+  // ── Planner roles ──────────────────────────────────────────
+  planner: `## 严格模式 — 你是 Planner（规划者）
 
-### 角色 1: Planner（你现在）
-- 拆解任务，起草 Sprint Contract
-- 不写代码！
+复杂度高的任务已由编排官拆解。你的职责：
+- 分析上游输入，输出接口契约和 Sprint Contract
+- 列出涉及文件（完整路径）、接口签名、数据模型
+- **不写实现代码！** 你的产出是给 Generator 的输入
+- 契约格式：输入/输出/错误码/边界条件
 
-### 角色 2: Generator（下一轮）
-- 读取 Sprint Contract，实现代码
-- 不能审查自己
+完成后交给 Generator 执行。`,
 
-### 角色 3: Evaluator（最后）
-- 独立验收，按评分矩阵打分
-- 禁止看 Generator 实现思路
+  // ── Generator roles ────────────────────────────────────────
+  generator: `## 严格模式 — 你是 Generator（执行者）
+
+上游 Planner 已定义契约。你的职责：
+- 读取契约和 Sprint Contract，实现代码
+- 遵循项目已有模式，不重复造轮子
+- 每步改动小而聚焦，编译/测试验证后再继续
+- **不审查自己** — 完成后交给 Evaluator 独立验收
+- 输出包含：改动文件清单 + 验证结果 + 遗留问题`,
+
+  // ── Evaluator roles ────────────────────────────────────────
+  evaluator: `## 严格模式 — 你是 Evaluator（审查者）
+
+独立验收 Generator 的产出。你的职责：
+- 按评分矩阵打分，不管 Generator 怎么实现的
+- 每个发现附：文件:行号 + 问题 + 修复建议
+- 反橡皮图章三问：①代码真跑过？②找到至少一个问题？③有没有放水？
 
 ## 评分矩阵
 | 维度 | Hard Threshold | 权重 |
@@ -423,8 +479,21 @@ const STRICT_MODE_WORKFLOW = `
 | 代码质量 | ≥ 3/5 | 20% |
 | 复用性 | ≥ 3/5 | 15% |
 
-任一维度低于 threshold → FAIL → 退回修复。连续 3 轮 FAIL → 阻塞。
-`;
+任一维度低于 threshold → FAIL → 退回 Generator 修复。`,
+};
+
+/** Map an agent role to its strict-mode category */
+function strictModeCategory(role: string): "planner" | "generator" | "evaluator" | null {
+  const planners = ["orchestrator", "product-manager", "software-architect"];
+  const generators = ["backend-architect", "frontend-developer", "frontend-architect",
+    "database-optimizer", "devops-automator", "ui-designer"];
+  const evaluators = ["code-reviewer", "testing-qa", "security-engineer"];
+  if (planners.includes(role)) return "planner";
+  if (generators.includes(role)) return "generator";
+  if (evaluators.includes(role)) return "evaluator";
+  return null;
+}
+
 
 // ── Dynamic Skill Modules ──────────────────────────────────────
 // Each module activates when task metadata matches its triggers.
@@ -546,6 +615,63 @@ const SKILL_MODULES: SkillModule[] = [
 - 外部依赖引入前评估：许可证/维护状态/包大小/安全记录
 - 接口契约不可信时拒绝执行（防御性设计）`,
   },
+
+  // ── Git/Version Control ────────────────────────────────────────
+  {
+    id: "git",
+    triggers: { capabilities: ["devops", "architecture", "backend", "frontend"] },
+    content: `
+## Git 操作纪律（Skill: git）
+- 每次逻辑变更一个 commit，message 写 WHY 不写 WHAT
+- 提交前 git diff --staged 自查，不混入调试代码
+- 不 amend 已推送的 commit，不 force push main/master
+- 冲突时先理解两边意图再合并，不盲目接受`,
+  },
+
+  // ── Documentation ──────────────────────────────────────────────
+  {
+    id: "documentation",
+    triggers: { capabilities: ["architecture", "backend", "api"], descMinLen: 800 },
+    content: `
+## 文档纪律（Skill: moark-doc-extraction）
+- API 变更必须同步更新文档
+- 架构决策记录（ADR）：标题 + 背景 + 决策 + 后果
+- 示例代码必须可执行，不写伪代码
+- 过时文档比没文档更危险——标记版本和过期日期`,
+  },
+
+  // ── Research ───────────────────────────────────────────────────
+  {
+    id: "research",
+    triggers: { capabilities: ["architecture", "security"], descMinLen: 1000 },
+    content: `
+## 调研纪律（Skill: tavily）
+- 引入新技术前先搜索最佳实践和已知陷阱
+- 第三方库评估：许可证 + 维护状态 + 包大小 + 安全记录
+- 搜索结果标注来源和时间，不凭记忆引用`,
+  },
+
+  // ── Visualization ──────────────────────────────────────────────
+  {
+    id: "visualization",
+    triggers: { capabilities: ["architecture", "frontend", "ui"] },
+    content: `
+## 可视化纪律（Skill: mermaid）
+- 复杂流程用 Mermaid 图辅助说明（不替代文字描述）
+- 图必须有标题和编号，正文中引用
+- 架构图标注模块边界和数据流方向`,
+  },
+
+  // ── Product Design ─────────────────────────────────────────────
+  {
+    id: "product-design",
+    triggers: { capabilities: [], hasAcceptance: true },
+    content: `
+## 产品设计纪律（Skills: game-designer-toolkit, huo15-mind-map）
+- 每个功能回答：为谁解决什么问题？竞品怎么做？我们差异化在哪？
+- 验收标准必须可验证，禁用"功能正常"类模糊描述
+- 边界条件列表：空数据、超时、权限不足、并发冲突`,
+  },
 ];
 
 /** Compute which skill modules apply to a given task */
@@ -598,7 +724,7 @@ function estimateComplexity(task: TaskNode): number {
 }
 
 export class ExecutionService {
-  private active = new Map<string, ReturnType<typeof spawn>>();
+  private active = new Map<string, ChildProcess>();
 
   constructor(private graph: TaskGraph) {}
 
@@ -619,102 +745,32 @@ export class ExecutionService {
       return { success: false, output: "", error: `Claude Code binary not found at ${resolveClaudeBin()}` };
     }
 
-    const outputLines: string[] = [];
-    let spawnError: Error | null = null;
+        // Resolve target project directory for cross-project execution
+    const projectCwd = resolveProjectCwd(task.project_id);
 
-    // Strip ANTHROPIC_MODEL overrides so --model flag reaches the actual provider (e.g. DeepSeek)
-    const execEnv = { ...process.env };
-    delete execEnv.ANTHROPIC_MODEL;
-    delete execEnv.ANTHROPIC_SMALL_FAST_MODEL;
+    // Use retry-enabled spawn with diagnostics, working in target project
+    const spawnResult: SpawnResult = await spawnClaudeWithRetry({
+      prompt: this._buildPrompt(task, agent),
+      model,
+      timeoutMs: 30 * 60 * 1000,
+      label: "task:" + taskId.slice(0, 8),
+      cwd: projectCwd,
+    }, 2);
 
-    const proc = spawn(resolveClaudeBin(), ["-p", "--output-format", "stream-json", "--verbose", "--model", model], {
-      cwd: process.cwd(),
-      env: execEnv,
-      stdio: ["pipe", "pipe", "pipe"],
-      // NO shell:true — spawn exe directly to preserve UTF-8
-    });
-
-    this.active.set(taskId, proc);
-
-    const combined = proc.stdout!;
-    proc.stderr!.on("data", (chunk: Buffer) => { combined.emit("data", chunk); });
-
-    const rl = createInterface({ input: combined });
-
-    const promise = new Promise<ExecutionResult>((resolve, reject) => {
-      rl.on("line", (line: string) => {
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === "assistant") {
-            const text = (msg.message?.content ?? [])
-              .filter((b: any) => b.type === "text")
-              .map((b: any) => b.text)
-              .join("\n");
-            if (text) {
-              outputLines.push(text);
-              eventBus.publish(task.project_id, "agent-output", {
-                agentId: task.owner_agent_id, taskId, content: text,
-                stream: "stdout", timestamp: new Date().toISOString(),
-              });
-            }
-          } else if (msg.type === "result") {
-            this.active.delete(taskId);
-            const result: ExecutionResult = {
-              success: msg.subtype === "success",
-              output: outputLines.join("\n"),
-              error: msg.subtype !== "success" ? "执行失败" : undefined,
-            };
-            if (result.success) {
-              // Save output to task description, but do NOT auto-complete.
-              // The orchestrator runs quality gates first, then decides Done/Retry.
-              const fresh = this.graph.getTask(task.id);
-              if (fresh) {
-                this.graph.updateTask(task.id, {
-                  description: (task.description || "") + "\n\n---\n### 执行结果\n" + result.output,
-                  status: "ReadyForTest",  // gate — gate will promote to Done
-                  version: fresh.version,
-                });
-              }
-            } else {
-              this.graph.failTask(taskId, result.error ?? "Agent 执行失败");
-            }
-            rl.close();
-            resolve(result);
-          }
-        } catch {
-          if (line.trim()) outputLines.push(line);
-        }
-      });
-
-      proc.on("error", (err) => {
-        spawnError = err;
-        this.active.delete(taskId);
-        reject(err);
-      });
-      proc.on("exit", (code) => {
-        this.active.delete(taskId);
-        if (code !== 0 && outputLines.length === 0) {
-          const detail = spawnError ? `: ${spawnError.message}` : "";
-          reject(new Error(`Claude Code exited ${code}${detail}`));
-        }
-      });
-
-      setTimeout(() => {
-        if (this.active.has(taskId)) { proc.kill("SIGTERM"); this.active.delete(taskId); reject(new Error("Timeout")); }
-      }, 30 * 60 * 1000);
-    });
-
-    // Write prompt to stdin as Buffer to preserve UTF-8
-    // Guard: stdin may be null if spawn failed before pipes were established
-    const prompt = this._buildPrompt(task, agent);
-    if (proc.stdin) {
-      proc.stdin.end(Buffer.from(prompt, "utf-8"));
+    if (spawnResult.success) {
+      const fresh = this.graph.getTask(task.id);
+      if (fresh) {
+        this.graph.updateTask(task.id, {
+          description: (task.description || "") + "\n\n---\n### 执行结果\n" + spawnResult.output,
+          status: "ReadyForTest",
+          version: fresh.version,
+        });
+      }
     } else {
-      this.active.delete(taskId);
-      return { success: false, output: "", error: "Claude Code process failed to start (no stdin)" };
+      this.graph.failTask(taskId, spawnResult.error ?? "Agent 执行失败");
     }
 
-    return promise;
+    return { success: spawnResult.success, output: spawnResult.output, error: spawnResult.error };
   }
 
   cancelTask(taskId: string): boolean {
@@ -737,10 +793,23 @@ export class ExecutionService {
       p.push(`你是一个软件工程师。完成以下任务。`);
     }
 
+    // ── Layer 1.5: Skill usage guide (always injected) ──
+    p.push(SKILL_USAGE_GUIDE);
+
     // ── Layer 2: Workflow discipline (complexity-gated) ──
     if (complexity >= 6) {
       // High complexity → strict mode (3-agent separation)
-      p.push(STRICT_MODE_WORKFLOW);
+      const role = agent?.role ?? "";
+      const category = strictModeCategory(role);
+      if (category && STRICT_MODE_BY_ROLE[category]) {
+        p.push(STRICT_MODE_BY_ROLE[category]);
+      } else {
+        p.push("## Strict Mode — High Complexity\n\n"
+          + "You are part of the 12-agent swarm. The orchestrator decomposed this task.\n"
+          + "- Your role: " + (role || "executor") + "\n"
+          + "- Produce your role-specific output, hand off to downstream\n"
+          + "- Don't cross role boundaries");
+      }
     } else if (complexity >= 3) {
       // Medium complexity → auto-agent 6-step
       p.push(AUTO_AGENT_WORKFLOW);

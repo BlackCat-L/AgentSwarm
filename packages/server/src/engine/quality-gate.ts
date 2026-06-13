@@ -8,17 +8,8 @@
 //   GATE 3: Simplify    — detect redundant patterns
 //   GATE 4: Learn       — record errors to .learnings/
 
-import { spawn } from "node:child_process";
 import type { TaskNode } from "@agent-swarm/shared";
-
-function resolveClaudeBin(): string {
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || "";
-    const sep = "\\";
-    return [appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"].join(sep);
-  }
-  return "claude";
-}
+import { spawnClaudeOnce } from "./claude-spawn.js";
 
 export interface GateResult {
   passed: boolean;
@@ -34,41 +25,15 @@ export interface QualityReport {
   summary: string;
 }
 
-async function quickAsk(prompt: string, model: string = "deepseek-v4-flash"): Promise<string> {
-  const { createInterface } = await import("node:readline");
-  return new Promise((resolve) => {
-    const execEnv = { ...process.env };
-    delete execEnv.ANTHROPIC_MODEL;
-    delete execEnv.ANTHROPIC_SMALL_FAST_MODEL;
-
-    const proc = spawn(resolveClaudeBin(), [
-      "-p", "--output-format", "stream-json", "--verbose", "--model", model,
-      "--max-turns", "3",
-    ], {
-      env: execEnv,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const lines: string[] = [];
-    const rl = createInterface({ input: proc.stdout! });
-    proc.stderr!.on("data", (c: Buffer) => proc.stdout!.emit("data", c));
-    rl.on("line", (line: string) => {
-      try {
-        const m = JSON.parse(line);
-        if (m.type === "assistant") {
-          (m.message?.content ?? [])
-            .filter((b: any) => b.type === "text")
-            .forEach((b: any) => lines.push(b.text));
-        }
-      } catch {}
-    });
-
-    proc.on("exit", () => resolve(lines.join("\n")));
-    proc.stdin!.end(Buffer.from(prompt, "utf-8"));
-
-    // Timeout after 60s — gates are fast checks
-    setTimeout(() => { proc.kill(); resolve(lines.join("\n")); }, 60_000);
+async function quickAsk(prompt: string, model: string = "deepseek-v4-pro[1m]"): Promise<string> {
+  const result = await spawnClaudeOnce({
+    prompt,
+    model,
+    timeoutMs: 60_000,
+    label: "quality-gate",
   });
+  // Gates are advisory — on failure, return empty string (gate handles gracefully)
+  return result.success ? result.output : "";
 }
 
 export class QualityGateService {

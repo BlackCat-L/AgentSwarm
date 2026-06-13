@@ -25,7 +25,7 @@ export type AgentRole =
 export type AgentRuntime = "claude-code" | "hermes" | "openclaw";
 
 /** Agent 模型 */
-export type AgentModel = "deepseek-v4-pro[1m]" | "deepseek-v4-flash";
+export type AgentModel = "deepseek-v4-pro[1m]" | "deepseek-v4-pro[1m]";
 
 /** Agent 会话状态（对齐 PRD §0.7 状态机） */
 export type AgentStatus =
@@ -75,11 +75,11 @@ export interface AgentIdentity {
 /** 角色到推荐模型的映射 */
 export const ROLE_MODEL_MAP: Partial<Record<AgentRole, AgentModel>> & Record<string, AgentModel> = {
   orchestrator: "deepseek-v4-pro[1m]", "product-manager": "deepseek-v4-pro[1m]", "software-architect": "deepseek-v4-pro[1m]",
-  "ui-designer": "deepseek-v4-flash", "database-optimizer": "deepseek-v4-pro[1m]", "backend-architect": "deepseek-v4-pro[1m]",
-  "frontend-developer": "deepseek-v4-flash", "frontend-architect": "deepseek-v4-pro[1m]", "devops-automator": "deepseek-v4-flash",
-  "testing-evidence-collector": "deepseek-v4-flash", "testing-qa": "deepseek-v4-flash", "security-engineer": "deepseek-v4-pro[1m]",
-  "code-reviewer": "deepseek-v4-pro[1m]", "reality-checker": "deepseek-v4-pro[1m]", "technical-writer": "deepseek-v4-flash",
-  custom: "deepseek-v4-flash",
+  "ui-designer": "deepseek-v4-pro[1m]", "database-optimizer": "deepseek-v4-pro[1m]", "backend-architect": "deepseek-v4-pro[1m]",
+  "frontend-developer": "deepseek-v4-pro[1m]", "frontend-architect": "deepseek-v4-pro[1m]", "devops-automator": "deepseek-v4-pro[1m]",
+  "testing-evidence-collector": "deepseek-v4-pro[1m]", "testing-qa": "deepseek-v4-pro[1m]", "security-engineer": "deepseek-v4-pro[1m]",
+  "code-reviewer": "deepseek-v4-pro[1m]", "reality-checker": "deepseek-v4-pro[1m]", "technical-writer": "deepseek-v4-pro[1m]",
+  custom: "deepseek-v4-pro[1m]",
 };
 
 /** 角色中文名 */
