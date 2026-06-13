@@ -98,8 +98,8 @@ export default function App() {
         {/* Agent Status */}
         <section>
           <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Agent 团队</h2>
-          <div className="grid grid-cols-4 gap-3">
-            {(agents || []).slice(0, 8).map((a: any) => (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {(agents || []).map((a: any) => (
               <div key={a.id} className={card + " p-3 hover:border-blue-300 dark:hover:border-slate-600 transition-colors"}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-mono text-blue-600 dark:text-blue-400 text-sm font-medium">{a.name}</span>
@@ -109,7 +109,7 @@ export default function App() {
               </div>
             ))}
             {(!agents || agents.length === 0) && (
-              <div className="col-span-4 text-center py-8 text-sm text-slate-400">
+              <div className="col-span-full text-center py-8 text-sm text-slate-400">
                 暂无 Agent — 通过 API 或 CLI 注册第一个 Agent
               </div>
             )}
