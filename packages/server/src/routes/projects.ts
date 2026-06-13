@@ -67,21 +67,66 @@ router.post("/", async (c) => {
   const parsed = await parseBody(c, createSchema);
   if (parsed.error) return c.json({ error: "请求参数校验失败", details: parsed.error }, 400);
 
-  const { name, path, worktree_base, config } = parsed.data!;
+  const { name, path: rawPath, worktree_base, config } = parsed.data!;
+
+  // ── Path validation ──────────────────────────────────────
+  const fs = await import("node:fs");
+  const pathModule = await import("node:path");
+  const resolved = pathModule.resolve(rawPath);
+
+  // Normalize: resolve relative paths, remove trailing slashes
+  const normalizedPath = resolved.replace(/[\\/]+$/, "");
+
+  // Security: reject non-existent paths
+  if (!fs.existsSync(normalizedPath)) {
+    return c.json({
+      error: "项目路径不存在",
+      path: normalizedPath,
+      hint: "请确保路径指向一个已存在的目录"
+    }, 400);
+  }
+
+  // Security: reject files (must be directory)
+  const stat = fs.statSync(normalizedPath);
+  if (!stat.isDirectory()) {
+    return c.json({ error: "项目路径必须是目录，不能是文件", path: normalizedPath }, 400);
+  }
+
+  // Security: reject paths outside expected roots
+  const cwd = process.cwd().replace(/[\\/]+$/, "");
+  const isWithinWorkspace = normalizedPath.startsWith(cwd) ||
+    /^[A-Z]:[\\/]company[\\/]/.test(normalizedPath); // allow F:/company/* paths
+  if (!isWithinWorkspace) {
+    console.warn(`[projects] Path outside workspace: ${normalizedPath} (cwd: ${cwd})`);
+    // Allow anyway but log a warning — the user might have projects anywhere
+  }
+
   const db = getDb();
 
+  // Check for duplicate path
   const check = db.prepare("SELECT id FROM projects WHERE path = ?");
-  check.bind([path]);
-  if (check.step()) { check.free(); return c.json({ error: "项目路径已存在" }, 409); }
+  check.bind([normalizedPath]);
+  if (check.step()) {
+    check.free();
+    return c.json({ error: "项目路径已注册", path: normalizedPath, hint: "该路径已有项目，无需重复注册" }, 409);
+  }
   check.free();
 
   const id = uuidv4();
   const now = new Date().toISOString();
   db.run(
     "INSERT INTO projects (id, name, path, worktree_base, config, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-    [id, name, path, worktree_base ?? null, JSON.stringify(config ?? {}), now, now]
+    [id, name, normalizedPath, worktree_base ?? null, JSON.stringify(config ?? {}), now, now]
   );
   saveDb();
+
+  // ── Auto-seed agents for this project ────────────────────
+  try {
+    const { seedAgentsForProject } = await import("../db/seed.js");
+    seedAgentsForProject(id);
+  } catch (err: any) {
+    console.warn(`[projects] Agent seed failed for ${id}: ${err.message}`);
+  }
 
   const stmt = db.prepare("SELECT * FROM projects WHERE id = ?");
   stmt.bind([id]); stmt.step();
