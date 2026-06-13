@@ -777,8 +777,13 @@ export class Orchestrator {
     const executor = new ExecutionService(this.taskGraph);
     const qualityGate = new QualityGateService();
 
-    // Collect all agents + build lookup map
-    const allAgents = await this._getAgents(projectId);
+    // Collect agents: prefer current project, fall back to all projects
+    let allAgents = await this._getAgents(projectId);
+    const idleInProject = allAgents.filter(a => a.status === "idle").length;
+    if (idleInProject === 0) {
+      console.log(`[autoExecute] No idle agents in project ${projectId.slice(0, 8)}, falling back to all projects`);
+      allAgents = await this._getAgents(null); // null = all projects
+    }
     const agentMap = new Map(allAgents.map(a => [a.id, a]));
 
     // Assign agents to each task
@@ -1026,12 +1031,14 @@ export class Orchestrator {
     return { ...plan, completed, blocked };
   }
 
-  private async _getAgents(projectId: string): Promise<AgentInstance[]> {
+  private async _getAgents(projectId: string | null): Promise<AgentInstance[]> {
     // Read from DB directly
     const { getDb } = await import("../db/connection.js");
     const db = getDb();
-    const stmt = db.prepare("SELECT * FROM agents WHERE project_id = ?");
-    stmt.bind([projectId]);
+    let sql = "SELECT * FROM agents";
+    if (projectId) { sql += " WHERE project_id = ?"; }
+    const stmt = db.prepare(sql);
+    if (projectId) { stmt.bind([projectId]); }
     const rows: any[] = [];
     while (stmt.step()) rows.push(stmt.getAsObject());
     stmt.free();

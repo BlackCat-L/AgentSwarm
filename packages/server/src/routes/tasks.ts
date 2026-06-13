@@ -188,6 +188,11 @@ router.post("/:id/status", async (c) => {
     return c.json({ error: "不能直接设置为 InDev。请先通过「分配 Agent」将任务分配给执行者。" }, 422);
   }
 
+  // Guard: InDev without owner is corrupted state — auto-repair to Backlog
+  if (status === "InDev" && !task.owner_agent_id) {
+    return c.json({ error: "任务 InDev 但没有分配 Agent——数据异常，请先分配 Agent", hint: "reset_to_backlog" }, 409);
+  }
+
   // Prevent transitions when unassigned
   if (status !== "Backlog" && !task.owner_agent_id) {
     return c.json({ error: "任务未分配 Agent，无法流转状态。请先分配 Agent。" }, 422);
