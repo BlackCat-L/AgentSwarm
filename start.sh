@@ -72,20 +72,20 @@ if ! command -v pnpm &>/dev/null; then
 fi
 echo "✅ pnpm $(pnpm --version)"
 
-# 3. Global /swarm skill
-echo "[3/5] 安装全局 /swarm skill..."
-SKILL_DIR="$HOME/.claude/skills/swarm"
-SKILL_FILE="$SKILL_DIR/SKILL.md"
-if [ ! -f "$SKILL_FILE" ]; then
-  mkdir -p "$SKILL_DIR" 2>/dev/null
-  if cp "$(dirname "$0")/.claude/skills/swarm/SKILL.md" "$SKILL_FILE" 2>/dev/null; then
-    echo "✅ 已安装全局 /swarm skill"
-  else
-    echo "⚠️  无法安装全局 skill"
+# 3. Sync skills to global (~/.claude/skills/)
+echo "[3/5] 同步 Skills 到全局..."
+GLOBAL_SKILLS="$HOME/.claude/skills"
+LOCAL_SKILLS="$(dirname "$0")/.claude/skills"
+mkdir -p "$GLOBAL_SKILLS" 2>/dev/null
+
+SKILL_COUNT=0
+for skill_dir in "$LOCAL_SKILLS"/*/; do
+  skill_name="$(basename "$skill_dir")"
+  if [ ! -d "$GLOBAL_SKILLS/$skill_name" ]; then
+    cp -r "$skill_dir" "$GLOBAL_SKILLS/$skill_name" 2>/dev/null && SKILL_COUNT=$((SKILL_COUNT + 1))
   fi
-else
-  echo "✅ 全局 /swarm skill 已安装"
-fi
+done
+echo "✅ 已同步 $SKILL_COUNT 个新 Skills 到全局 ($GLOBAL_SKILLS)"
 
 # 4. Install dependencies
 echo "[4/5] 安装依赖..."
@@ -114,4 +114,4 @@ elif command -v xdg-open &>/dev/null; then
   xdg-open http://localhost:5173
 fi
 
-pnpm dev
+pnpm dev:stable

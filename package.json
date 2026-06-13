@@ -5,6 +5,7 @@
   "description": "Agent Swarm — Dark Factory 全自主多 Agent 开发平台",
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,green \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev:stable": "concurrently -n server,web -c cyan,green \"pnpm dev:server:stable\" \"pnpm dev:web\"",
     "start": "concurrently -n server,web -c cyan,green \"pnpm dev:server\" \"pnpm dev:web\"",
     "build": "pnpm --recursive build",
     "build:shared": "pnpm --filter @agent-swarm/shared build",

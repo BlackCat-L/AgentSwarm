@@ -80,24 +80,25 @@ exit /b 1
 :pnpm_ok
 for /f "tokens=*" %%i in ('pnpm --version') do echo   OK pnpm %%i
 
-rem --- Step 3: Global /swarm skill -----------------------
-echo   [3/5] Global /swarm skill...
+rem --- Step 3: Sync skills to global (~/.claude/skills/) ----
+echo   [3/5] Skills...
 
-set "SKILL_DIR=%USERPROFILE%\.claude\skills\swarm"
-set "SKILL_FILE=%SKILL_DIR%\SKILL.md"
+set "GLOBAL_SKILLS=%USERPROFILE%\.claude\skills"
+set "LOCAL_SKILLS=%~dp0.claude\skills"
 
-if not exist "%SKILL_DIR%" mkdir "%SKILL_DIR%" 2>nul
+if not exist "%GLOBAL_SKILLS%" mkdir "%GLOBAL_SKILLS%" 2>nul
 
-if not exist "%SKILL_FILE%" (
-    copy "%~dp0.claude\skills\swarm\SKILL.md" "%SKILL_FILE%" >nul 2>&1
-    if !errorlevel! equ 0 (
-        echo   OK Installed global /swarm skill
-    ) else (
-        echo   WARN: Could not install global skill (will try later)
+echo     Syncing skills to global...
+set "SKILL_COUNT=0"
+for /d %%d in ("%LOCAL_SKILLS%\*") do (
+    set "SKILL_NAME=%%~nxd"
+    set "DEST=%GLOBAL_SKILLS%\!SKILL_NAME!"
+    if not exist "!DEST!" (
+        xcopy "%%d\*" "!DEST!\" /E /I /Q /Y >nul 2>&1
+        if !errorlevel! equ 0 set /a SKILL_COUNT+=1
     )
-) else (
-    echo   OK Global /swarm skill already installed
 )
+echo   OK Synced !SKILL_COUNT! new skills to global (%GLOBAL_SKILLS%)
 
 rem --- Step 4: Dependencies -------------------------------
 echo   [4/5] Dependencies...
@@ -122,5 +123,5 @@ echo   Ctrl+C to stop
 echo.
 
 start "" http://localhost:5173
-call npx concurrently -n api,web -c cyan,green "pnpm dev:server" "pnpm dev:web"
+call pnpm dev:stable
 pause
