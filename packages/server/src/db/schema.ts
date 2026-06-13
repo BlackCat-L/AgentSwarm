@@ -6,7 +6,7 @@
  * Versioned schema definitions. Each entry is a migration version.
  * DDL statements are executed in order, idempotently.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_DDL = [
   // ====== 1. projects ======
@@ -71,6 +71,7 @@ export const SCHEMA_DDL = [
     max_retries   INTEGER NOT NULL DEFAULT 3,
     timeout_ms    INTEGER,
     error_message TEXT,
+    phase         TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
     completed_at  TEXT

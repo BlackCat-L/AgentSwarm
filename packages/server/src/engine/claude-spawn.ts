@@ -62,6 +62,7 @@ export interface SpawnConfig {
   timeoutMs?: number;
   label?: string; // for log prefix
   cwd?: string;   // working directory for Claude Code (target project root)
+  useInteractive?: boolean; // true = interactive mode (tools available), false/undefined = -p print mode
 }
 
 export interface SpawnResult {
@@ -76,11 +77,14 @@ export interface SpawnResult {
 export async function spawnClaudeOnce(
   config: SpawnConfig
 ): Promise<SpawnResult> {
-  const { prompt, model = "deepseek-v4-pro[1m]", timeoutMs = 120_000, cwd } = config;
+  const { prompt, model = "deepseek-v4-pro[1m]", timeoutMs = 120_000, label, cwd } = config;
+  const logPrefix = label ? `[spawn:${label}]` : "[spawn]";
 
   // Pre-flight checks
   if (!claudeBinAvailable()) {
-    return { success: false, output: "", error: `Claude Code binary not found at ${resolveClaudeBin()}` };
+    const err = `Claude Code binary not found at ${resolveClaudeBin()}`;
+    console.error(`${logPrefix} Pre-flight FAILED: ${err}`);
+    return { success: false, output: "", error: err };
   }
 
   // Strip ANTHROPIC_MODEL overrides so --model flag reaches the actual provider
@@ -92,11 +96,20 @@ export async function spawnClaudeOnce(
   const outputLines: string[] = [];
   let spawnError: Error | null = null;
 
+  console.log(`${logPrefix} Starting: bin="${bin}", model="${model}", timeout=${timeoutMs}ms, cwd="${cwd || process.cwd()}"`);
+  const startTime = Date.now();
+
   return new Promise((resolve) => {
     let settled = false;
     const done = (result: SpawnResult) => {
       if (settled) return;
       settled = true;
+      const elapsed = Date.now() - startTime;
+      if (result.success) {
+        console.log(`${logPrefix} SUCCESS: ${result.output.length} chars output in ${elapsed}ms`);
+      } else {
+        console.warn(`${logPrefix} FAILED (${elapsed}ms): ${result.error?.slice(0, 200) ?? "unknown error"}`);
+      }
       resolve(result);
     };
 
@@ -191,31 +204,182 @@ export async function spawnClaudeOnce(
   });
 }
 
+// ── Interactive spawn (no -p flag — full tool access) ─────
+
+export async function spawnClaudeInteractive(
+  config: SpawnConfig
+): Promise<SpawnResult> {
+  const { prompt, model = "deepseek-v4-pro[1m]", timeoutMs = 300_000, label, cwd } = config;
+  const logPrefix = label ? `[spawn:${label}]` : "[spawn:interactive]";
+
+  // Pre-flight checks
+  if (!claudeBinAvailable()) {
+    const err = `Claude Code binary not found at ${resolveClaudeBin()}`;
+    console.error(`${logPrefix} Pre-flight FAILED: ${err}`);
+    return { success: false, output: "", error: err };
+  }
+
+  // Strip ANTHROPIC_MODEL overrides so --model flag reaches the actual provider
+  const execEnv = { ...process.env };
+  delete execEnv.ANTHROPIC_MODEL;
+  delete execEnv.ANTHROPIC_SMALL_FAST_MODEL;
+
+  const bin = resolveClaudeBin();
+  const outputLines: string[] = [];
+  let spawnError: Error | null = null;
+
+  console.log(`${logPrefix} Starting interactive (NO -p): bin="${bin}", model="${model}", timeout=${timeoutMs}ms, cwd="${cwd || process.cwd()}"`);
+  const startTime = Date.now();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result: SpawnResult) => {
+      if (settled) return;
+      settled = true;
+      const elapsed = Date.now() - startTime;
+      if (result.success) {
+        console.log(`${logPrefix} SUCCESS: ${result.output.length} chars output in ${elapsed}ms`);
+      } else {
+        console.warn(`${logPrefix} FAILED (${elapsed}ms): ${result.error?.slice(0, 200) ?? "unknown error"}`);
+      }
+      resolve(result);
+    };
+
+    let proc: ChildProcess;
+    try {
+      // NO -p flag — interactive mode gives agents full tool access (Skill, Read, Write, Bash, etc.)
+      proc = spawn(bin, ["--output-format", "stream-json", "--verbose", "--model", model], {
+        env: execEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: cwd || process.cwd(),
+      });
+    } catch (err: any) {
+      done({ success: false, output: "", error: `spawn(${bin}) failed: ${err.message}` });
+      return;
+    }
+
+    const rl = createInterface({ input: proc.stdout! });
+
+    proc.stderr!.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf-8");
+      // Capture all stderr — API errors, rate limits, auth failures are here
+      const trimmed = text.trim();
+      if (trimmed) {
+        outputLines.push(`[stderr] ${trimmed}`);
+      }
+    });
+
+    let toolUseCount = 0;
+
+    rl.on("line", (line: string) => {
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === "assistant") {
+          const text = (msg.message?.content ?? [])
+            .filter((b: any) => b.type === "text")
+            .map((b: any) => b.text)
+            .join("\n");
+          if (text) outputLines.push(text);
+        } else if (msg.type === "tool_use") {
+          toolUseCount++;
+          const toolName = msg.name ?? "unknown";
+          outputLines.push(`[tool_use: ${toolName}]`);
+          console.log(`${logPrefix} Tool call #${toolUseCount}: ${toolName}`);
+        } else if (msg.type === "result") {
+          console.log(`${logPrefix} Task complete (${toolUseCount} tool calls made)`);
+          done({
+            success: msg.subtype === "success",
+            output: outputLines.join("\n"),
+            error: msg.subtype !== "success" ? "Task execution failed" : undefined,
+          });
+        }
+      } catch {
+        if (line.trim()) outputLines.push(line);
+      }
+    });
+
+    proc.on("error", (err: NodeJS.ErrnoException) => {
+      spawnError = err;
+      done({
+        success: false,
+        output: outputLines.join("\n"),
+        error: `Spawn error: ${err.code} — ${err.message}`,
+      });
+    });
+
+    proc.on("exit", (code: number | null) => {
+      if (settled) return;
+      const exitCode = code ?? -1;
+      if (exitCode === 0 && outputLines.length > 0) {
+        // Process exited cleanly with output (JSON lines parsed above)
+        // result event should have fired; if we're here it means no "result" type
+        done({ success: true, output: outputLines.join("\n") });
+      } else {
+        const detail = decodeExitCode(exitCode);
+        const context = spawnError ? ` | spawn: ${spawnError.message}` : "";
+        const lastLine = outputLines.length > 0 ? outputLines[outputLines.length - 1] : "";
+        const snippet = lastLine ? ` | last output: ${lastLine.slice(0, 200)}` : "";
+        done({
+          success: false,
+          exitCode,
+          output: outputLines.join("\n"),
+          error: `${detail}${context}${snippet}`,
+        });
+      }
+    });
+
+    // Write prompt and close stdin — agent processes it, makes tool calls, produces result
+    if (proc.stdin) {
+      proc.stdin.end(Buffer.from(prompt, "utf-8"));
+    } else {
+      done({ success: false, output: "", error: "Process stdin unavailable — binary may have failed to start" });
+    }
+
+    // Timeout (longer for interactive mode since agents may make multiple tool calls)
+    setTimeout(() => {
+      if (!settled) {
+        proc.kill("SIGTERM");
+        done({
+          success: false,
+          output: outputLines.join("\n"),
+          error: `Timeout after ${timeoutMs}ms (${toolUseCount} tool calls made)`,
+        });
+      }
+    }, timeoutMs);
+  });
+}
+
 // ── Retry wrapper ──────────────────────────────────────────
 
 export async function spawnClaudeWithRetry(
   config: SpawnConfig,
   maxRetries: number = 2
 ): Promise<SpawnResult> {
+  const logPrefix = config.label ? `[spawn:${config.label}]` : "[spawn]";
   let lastResult: SpawnResult | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000); // 2s, 4s, 8s...
+      console.warn(`${logPrefix} Retry attempt ${attempt}/${maxRetries} after ${delay}ms delay...`);
       await new Promise(r => setTimeout(r, delay));
     }
 
-    const result = await spawnClaudeOnce(config);
+    const result = config.useInteractive
+      ? await spawnClaudeInteractive(config)
+      : await spawnClaudeOnce(config);
     if (result.success) return result;
 
     // Don't retry configuration errors
     if (result.error?.includes("binary not found") || result.error?.includes("API key")) {
+      console.error(`${logPrefix} Configuration error — not retrying: ${result.error.slice(0, 200)}`);
       return result;
     }
 
     lastResult = result;
   }
 
+  console.error(`${logPrefix} All ${maxRetries + 1} attempts failed`);
   return {
     ...lastResult!,
     error: `${lastResult!.error} (retried ${maxRetries} times)`,

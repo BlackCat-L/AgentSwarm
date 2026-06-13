@@ -59,6 +59,9 @@ export interface TaskNode {
   // ---- 错误 ----
   error_message: string | null;
 
+  // ---- 阶段 ----
+  phase: string | null;
+
   // ---- 时间戳 ----
   created_at: string;
   updated_at: string;
@@ -114,6 +117,8 @@ export interface CreateTaskInput {
   expected_output?: string;
   max_retries?: number;
   timeout_ms?: number;
+  /** 所属阶段名称（来自 analyzeComplexity 的 estimatedPhases） */
+  phase?: string;
 }
 
 /** 更新任务输入 */

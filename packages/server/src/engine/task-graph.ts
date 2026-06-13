@@ -44,6 +44,7 @@ function rowToTask(row: Record<string, unknown>): TaskNode {
     max_retries: row.max_retries as number,
     timeout_ms: row.timeout_ms as number | null,
     error_message: (row.error_message as string) ?? null,
+    phase: (row.phase as string) ?? null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
     completed_at: (row.completed_at as string) ?? null,
@@ -87,9 +88,9 @@ export class TaskGraph {
       `INSERT INTO tasks (
         id, project_id, title, description, status, priority, complexity,
         required_capabilities, acceptance_criteria, expected_output,
-        max_retries, timeout_ms, version, retry_count,
+        max_retries, timeout_ms, version, retry_count, phase,
         created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         id,
         input.project_id,
@@ -105,6 +106,7 @@ export class TaskGraph {
         input.timeout_ms ?? null,
         1,   // version
         0,   // retry_count
+        (input as any).phase ?? null,
         now,
         now,
       ]
@@ -453,12 +455,16 @@ export class TaskGraph {
    */
   failTask(taskId: string, errorMessage: string): TaskNode | null {
     const task = this.getTask(taskId);
-    if (!task) return null;
+    if (!task) {
+      console.error(`[failTask] Task ${taskId.slice(0, 8)} not found in DB — cannot fail`);
+      return null;
+    }
 
     const newRetryCount = task.retry_count + 1;
 
     if (newRetryCount >= task.max_retries) {
       // Max retries exhausted — permanently block
+      console.warn(`[failTask] Task "${task.title}" (${taskId.slice(0, 8)}) retries EXHAUSTED (${newRetryCount}/${task.max_retries}) — moving to Blocked. Error: ${errorMessage.slice(0, 200)}`);
       const db = getDb();
       const now = new Date().toISOString();
       db.run(
@@ -474,6 +480,7 @@ export class TaskGraph {
       this.cascadeBlock(taskId);
     } else {
       // Within retry limit — mark as failed, goes back to Backlog
+      console.log(`[failTask] Task "${task.title}" (${taskId.slice(0, 8)}) failed — retry ${newRetryCount}/${task.max_retries}, moving to Backlog. Error: ${errorMessage.slice(0, 200)}`);
       const db = getDb();
       const now = new Date().toISOString();
       db.run(

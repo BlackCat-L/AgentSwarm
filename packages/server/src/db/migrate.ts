@@ -69,7 +69,16 @@ export function migrate(): void {
     removeAgentCheckConstraint(db, /CHECK\s*\(model IN \([^)]+\)\)/);
   }
 
-  // 8. Create all indexes
+  // 8. v8: Add phase column to tasks (safe ALTER TABLE — idempotent via try/catch)
+  if (currentVersion < 8) {
+    try {
+      db.run("ALTER TABLE tasks ADD COLUMN phase TEXT");
+    } catch {
+      // column already exists (e.g., CREATE TABLE IF NOT EXISTS on fresh DB)
+    }
+  }
+
+  // 9. Create all indexes
   for (const idx of SCHEMA_INDEXES) {
     db.run(idx);
   }

@@ -737,37 +737,84 @@ export class ExecutionService {
     agent?: AgentInstance
   ): Promise<ExecutionResult> {
     const task = this.graph.getTask(taskId);
-    if (!task) throw new Error("任务不存在");
-    if (task.status !== "InDev") throw new Error(`任务状态为 ${task.status}，需要先分配到Agent`);
+    if (!task) {
+      const err = `Task ${taskId} not found in DB`;
+      console.error(`[executeTask] ${err}`);
+      throw new Error(err);
+    }
+    if (task.status !== "InDev") {
+      const err = `Task "${task.title}" status=${task.status}, expected InDev`;
+      console.error(`[executeTask] ${err}`);
+      throw new Error(err);
+    }
+
+    console.log(`[executeTask] Starting "${task.title}" (model=${model}, agent=${agent?.name ?? "none"}, project=${task.project_id})`);
 
     // Pre-flight: verify the Claude Code binary exists
     if (!claudeBinAvailable()) {
-      return { success: false, output: "", error: `Claude Code binary not found at ${resolveClaudeBin()}` };
+      const err = `Claude Code binary not found at ${resolveClaudeBin()}`;
+      console.error(`[executeTask] Pre-flight FAILED: ${err}`);
+      return { success: false, output: "", error: err };
     }
 
         // Resolve target project directory for cross-project execution
     const projectCwd = resolveProjectCwd(task.project_id);
+    console.log(`[executeTask] Working directory: ${projectCwd}`);
+
+    // Compute complexity to decide print vs interactive mode
+    // complexity >= 3 → interactive mode (agents can use Skill, Read, Write, Bash, etc.)
+    // complexity < 3  → -p print mode (faster for simple tasks that don't need tools)
+    const complexity = estimateComplexity(task);
+    const useInteractive = complexity >= 3;
 
     // Use retry-enabled spawn with diagnostics, working in target project
+    console.log(`[executeTask] Spawning Claude Code for "${task.title}" (complexity=${complexity}/10, mode=${useInteractive ? "INTERACTIVE" : "PRINT"}, timeout=30min)...`);
     const spawnResult: SpawnResult = await spawnClaudeWithRetry({
       prompt: this._buildPrompt(task, agent),
       model,
       timeoutMs: 30 * 60 * 1000,
       label: "task:" + taskId.slice(0, 8),
       cwd: projectCwd,
+      useInteractive,
     }, 2);
 
+    console.log(`[executeTask] Spawn result for "${task.title}": success=${spawnResult.success}, output=${spawnResult.output.length} chars, error=${spawnResult.error?.slice(0, 100) ?? "none"}`);
+
     if (spawnResult.success) {
-      const fresh = this.graph.getTask(task.id);
-      if (fresh) {
-        this.graph.updateTask(task.id, {
+      // ── CRITICAL: Retry updateTask with fresh version if it fails ──
+      let updated = false;
+      for (let retry = 0; retry < 3 && !updated; retry++) {
+        const fresh = this.graph.getTask(task.id);
+        if (!fresh) {
+          console.error(`[executeTask] CRITICAL: Task "${task.title}" (${task.id.slice(0, 8)}) not found in DB after successful spawn — cannot update status`);
+          break;
+        }
+        const result = this.graph.updateTask(task.id, {
           description: (task.description || "") + "\n\n---\n### 执行结果\n" + spawnResult.output,
           status: "ReadyForTest",
           version: fresh.version,
         });
+        if (result) {
+          console.log(`[executeTask] Task "${task.title}" → ReadyForTest (attempt ${retry + 1})`);
+          updated = true;
+        } else {
+          console.warn(`[executeTask] updateTask failed for "${task.title}" (version conflict, attempt ${retry + 1}/3) — retrying with fresh version`);
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+      if (!updated) {
+        console.error(`[executeTask] FAILED to update task "${task.title}" to ReadyForTest after 3 attempts — task may stall at InDev`);
       }
     } else {
-      this.graph.failTask(taskId, spawnResult.error ?? "Agent 执行失败");
+      // Spawn failed — delegate to failTask (handles retry count and status transition)
+      const errMsg = spawnResult.error ?? "Agent execution failed";
+      console.warn(`[executeTask] Spawn failed for "${task.title}": ${errMsg.slice(0, 200)}`);
+      const failed = this.graph.failTask(taskId, errMsg);
+      if (failed) {
+        console.log(`[executeTask] failTask result for "${task.title}": status=${failed.status}, retry=${failed.retry_count}/${failed.max_retries}`);
+      } else {
+        console.error(`[executeTask] failTask returned null for "${task.title}" — task status may be stuck at InDev`);
+      }
     }
 
     return { success: spawnResult.success, output: spawnResult.output, error: spawnResult.error };
@@ -839,6 +886,8 @@ export class ExecutionService {
       ``,
       `## 任务 (复杂度: ${complexity}/10)`,
       task.title,
+      ``,
+      `**输出语言：简体中文。所有执行结果、改动说明、验证报告、遗留问题和建议必须使用中文撰写。代码中的变量名和注释也优先使用中文或中英双语。**`,
       ``
     );
     if (task.description) p.push(`## 描述`, task.description, ``);

@@ -183,6 +183,16 @@ router.post("/:id/status", async (c) => {
     }, 409);
   }
 
+  // Block direct transition to InDev — must go through POST /assign
+  if (status === "InDev" && task.status === "Backlog") {
+    return c.json({ error: "不能直接设置为 InDev。请先通过「分配 Agent」将任务分配给执行者。" }, 422);
+  }
+
+  // Prevent transitions when unassigned
+  if (status !== "Backlog" && !task.owner_agent_id) {
+    return c.json({ error: "任务未分配 Agent，无法流转状态。请先分配 Agent。" }, 422);
+  }
+
   const result = graph.updateTask(id, { status, version });
   if (!result) return c.json({ error: "乐观锁冲突" }, 409);
 
@@ -229,6 +239,26 @@ router.delete("/:id", (c) => {
   const ok = graph.deleteTask(c.req.param("id"));
   if (!ok) return c.json({ error: "任务不存在" }, 404);
   return c.json({ deleted: c.req.param("id") });
+});
+
+// POST /api/tasks/clean — clean up tasks by project + optional status filter
+router.post("/clean", async (c) => {
+  const { project_id, status } = await c.req.json().catch(() => ({}));
+  if (!project_id) return c.json({ error: "project_id 必需" }, 400);
+
+  const targetStatus = (status as string) || "Backlog";
+  const tasks = graph.queryTasks({ project_id, status: targetStatus as any, limit: 10000 });
+
+  let deleted = 0;
+  for (const task of tasks) {
+    if (graph.deleteTask(task.id)) deleted++;
+  }
+
+  return c.json({
+    message: `已清理项目 ${project_id} 中 ${deleted} 个 ${targetStatus} 状态的任务`,
+    deleted,
+    status: targetStatus,
+  });
 });
 
 export default router;
