@@ -32,6 +32,10 @@ routes.post("/auto", async (c) => {
   const { project_id, title, description } = await c.req.json().catch(() => ({}));
   if (!project_id || !title) return c.json({ error: "project_id 和 title 必需" }, 400);
 
+  // Encoding diagnostic: log hex of title to detect UTF-8 corruption
+  const titleHex = Buffer.from(title, "utf-8").toString("hex").slice(0, 40);
+  console.log(`[Auto] title hex: ${titleHex} | ${title.slice(0, 40)}`);
+
   const { getOrchestrator } = await import("../engine/shared-services.js");
   const orch = getOrchestrator();
 

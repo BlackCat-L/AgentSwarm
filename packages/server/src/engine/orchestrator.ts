@@ -42,7 +42,6 @@ export interface DecompositionResult {
 let _spawnModule: any = null;
 
 async function askClaude(prompt: string, model = "deepseek-v4-flash"): Promise<string> {
-  // Lazy-import to avoid circular deps at module init time
   if (!_spawnModule) {
     _spawnModule = await import("./claude-spawn.js");
   }
@@ -51,11 +50,64 @@ async function askClaude(prompt: string, model = "deepseek-v4-flash"): Promise<s
     model,
     timeoutMs: 120_000,
     label: "orchestrator-ask",
-  }, 2); // 2 retries for analysis — transient API errors are common
+  }, 2);
   if (result.success) return result.output;
-  // Include stderr output in error for diagnostics
   const stderr = result.output || "(no output)";
   throw new Error(`${result.error ?? "askClaude failed"} | stderr: ${stderr.slice(0, 300)}`);
+}
+
+// ── Robust JSON extraction from AI output ──────────────────
+// AI sometimes wraps JSON in markdown fences, adds commentary, or
+// produces slightly malformed JSON (trailing commas, unicode issues).
+// This function tries multiple strategies before giving up.
+
+function extractJson(output: string): any {
+  // Strategy 1: Remove markdown fences, try direct parse
+  const cleaned = output
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .trim();
+  try { return JSON.parse(cleaned); } catch {}
+
+  // Strategy 2: Find the outermost { } pair containing expected keys
+  // Look for {"score" or { "score"
+  const objMatch = cleaned.match(/\{[^{}]*"score"\s*:\s*\d+[\s\S]*\}/);
+  if (objMatch) {
+    try { return JSON.parse(objMatch[0]); } catch {}
+  }
+
+  // Strategy 3: Find any { } pair and try to fix common issues
+  const braceStart = cleaned.indexOf("{");
+  const braceEnd = cleaned.lastIndexOf("}");
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    let candidate = cleaned.slice(braceStart, braceEnd + 1);
+    // Fix trailing commas before } or ]
+    candidate = candidate.replace(/,(\s*[}\]])/g, "$1");
+    // Fix unescaped newlines in strings
+    candidate = candidate.replace(/\n/g, "\\n");
+    try { return JSON.parse(candidate); } catch {}
+  }
+
+  // Strategy 4: Extract fields individually with regex
+  const scoreMatch = cleaned.match(/"score"\s*:\s*(\d+)/);
+  const reasoningMatch = cleaned.match(/"reasoning"\s*:\s*"([^"]+)"/);
+  const agentMatch = cleaned.match(/"suggestedAgentCount"\s*:\s*(\d+)/);
+  const phasesMatch = cleaned.match(/"estimatedPhases"\s*:\s*\[([^\]]*)\]/);
+  if (scoreMatch?.[1]) {
+    const phases: string[] = [];
+    if (phasesMatch?.[1]) {
+      const items = phasesMatch[1].match(/"([^"]+)"/g);
+      if (items) phases.push(...items.map(i => i.replace(/"/g, "")));
+    }
+    return {
+      score: parseInt(scoreMatch[1]),
+      reasoning: reasoningMatch?.[1] ?? "AI analysis",
+      suggestedAgentCount: agentMatch?.[1] ? parseInt(agentMatch[1]) : 2,
+      estimatedPhases: phases,
+    };
+  }
+
+  throw new Error("No JSON object found in AI output");
 }
 
 // ── Capability inference (keyword → skill module mapping) ───
@@ -128,7 +180,7 @@ export class Orchestrator {
     try {
       const output = await askClaude(prompt);
       try {
-        const json = JSON.parse(output.replace(/```[^]*?```/g, "").trim());
+        const json = extractJson(output);
         return {
           score: Math.max(1, Math.min(10, json.score ?? 5)),
           reasoning: json.reasoning ?? "AI 分析",
@@ -136,15 +188,14 @@ export class Orchestrator {
           estimatedPhases: json.estimatedPhases ?? [],
         };
       } catch {
-        // AI output malformed → fallback with raw output snippet
+        // JSON extraction failed → fallback with raw output snippet
         const fb = this._fallbackComplexity(title, description);
-        fb.reasoning = `[AI输出解析失败，降级为关键词] ${fb.reasoning} | raw: ${output.slice(0, 100)}`;
+        fb.reasoning = `[JSON提取失败] ${fb.reasoning} | raw: ${output.slice(0, 100)}`;
         return fb;
       }
     } catch (err: any) {
-      // AI call failed entirely → fallback with error detail
       const fb = this._fallbackComplexity(title, description);
-      fb.reasoning = `[AI调用失败，降级为关键词] ${fb.reasoning} | 错误: ${err.message?.slice(0, 120) ?? 'unknown'}`;
+      fb.reasoning = `[AI调用失败] ${fb.reasoning} | ${err.message?.slice(0, 120) ?? 'unknown'}`;
       console.error(`[analyzeComplexity] AI call failed: ${err.message?.slice(0, 200)}`);
       return fb;
     }
@@ -194,30 +245,35 @@ export class Orchestrator {
 需求标题: ${title}
 需求描述: ${description}`;
 
-    const output = await askClaude(prompt);
     try {
-      const json = JSON.parse(output.replace(/```[^]*?```/g, "").trim());
+      const output = await askClaude(prompt);
+      try {
+        const json = extractJson(output);
+        return {
+          subTasks: (json.subTasks ?? []).map((t: any) => ({
+            title: t.title ?? "子任务",
+            description: t.description ?? "",
+            requiredCapabilities: t.requiredCapabilities ?? [],
+            dependsOn: t.dependsOn ?? [],
+            acceptanceCriteria: t.acceptanceCriteria ?? "",
+          })),
+          estimatedTotalMinutes: json.estimatedTotalMinutes ?? 30,
+          recommendedModel: json.recommendedModel ?? "deepseek-v4-pro[1m]",
+        };
+      } catch {
+        // JSON extraction failed — single task with inferred caps
+        console.error(`[decomposeTask] JSON extraction failed, output: ${output.slice(0, 200)}`);
+        return {
+          subTasks: [{ title, description, requiredCapabilities: inferCapabilities(title, description), dependsOn: [], acceptanceCriteria: "" }],
+          estimatedTotalMinutes: 15,
+          recommendedModel: "deepseek-v4-pro[1m]",
+        };
+      }
+    } catch (err: any) {
+      // AI call failed entirely
+      console.error(`[decomposeTask] AI call failed: ${err.message?.slice(0, 200)}`);
       return {
-        subTasks: (json.subTasks ?? []).map((t: any) => ({
-          title: t.title ?? "子任务",
-          description: t.description ?? "",
-          requiredCapabilities: t.requiredCapabilities ?? [],
-          dependsOn: t.dependsOn ?? [],
-          acceptanceCriteria: t.acceptanceCriteria ?? "",
-        })),
-        estimatedTotalMinutes: json.estimatedTotalMinutes ?? 30,
-        recommendedModel: json.recommendedModel ?? "deepseek-v4-pro[1m]",
-      };
-    } catch {
-      // Fallback: single task, infer capabilities from content
-      return {
-        subTasks: [{
-          title,
-          description,
-          requiredCapabilities: inferCapabilities(title, description),
-          dependsOn: [],
-          acceptanceCriteria: "",
-        }],
+        subTasks: [{ title, description, requiredCapabilities: inferCapabilities(title, description), dependsOn: [], acceptanceCriteria: "" }],
         estimatedTotalMinutes: 15,
         recommendedModel: "deepseek-v4-pro[1m]",
       };
