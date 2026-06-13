@@ -41,6 +41,9 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string; onClose: 
     queryKey: ["agents"], queryFn: () => fetch("/api/agents").then(r => r.json()) as Promise<any[]>,
   });
 
+  // Look up agent name from list
+  const agentName = (agents || []).find((a: any) => a.id === task?.owner_agent_id)?.name;
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="w-[520px] max-w-[90vw] bg-white dark:bg-slate-800 border-l border-gray-200 dark:border-slate-700 shadow-xl h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -57,7 +60,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string; onClose: 
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              {[["状态", task.status], ["优先级", String(task.priority)], ["重试", `${task.retry_count}/${task.max_retries}`], ["分派人", task.owner_agent_id?.slice(0, 12) || "未分配"]].map(([k, v]) => (
+              {[["状态", task.status], ["优先级", String(task.priority)], ["重试", `${task.retry_count}/${task.max_retries}`], ["分派人", agentName || task.owner_agent_id?.slice(0, 12) || "未分配"]].map(([k, v]) => (
                 <div key={k}><div className="text-[10px] text-slate-400 uppercase tracking-wider">{k}</div><div className="text-sm text-slate-700 dark:text-slate-200 truncate">{v}</div></div>
               ))}
             </div>
