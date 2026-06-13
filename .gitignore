@@ -73,3 +73,5 @@ packages/server/tmp/
 temp/
 __pycache__/
 GitHub
+# ── Personal scan reports ───────────────────────────────
+.claude/skills/xiaoliu666/scripts/*扫描报告.md
