@@ -156,13 +156,12 @@ const EVALUATOR_ROLES = new Set([
   "code-reviewer", "testing-qa", "security-engineer",
 ]);
 
-/** Agent roles that plan/design — they produce specs, not code, so skip pipeline */
-const PLANNER_ROLES = new Set([
-  "orchestrator", "product-manager", "software-architect",
-]);
-
 /** Minimum complexity score to trigger the 3-stage pipeline */
 const PIPELINE_COMPLEXITY_THRESHOLD = 3;
+
+/** Evaluator task title prefixes for identification */
+const EVAL_TITLE_PREFIX = "审查:";
+const QA_TITLE_PREFIX = "验证:";
 
 function isGeneratorRole(role: string): boolean {
   return GENERATOR_ROLES.has(role);
@@ -379,6 +378,243 @@ export class Orchestrator {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // 3.5️⃣  3-Stage Pipeline — Generator → Review → QA → Done
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * After a Generator task's spawn succeeds, create two downstream
+   * evaluation tasks: code-review (reviewer) and testing-qa (QA).
+   *
+   * Dependency chain:
+   *   Generator task (parent)
+   *     ├──→ code-review task (assigned to code-reviewer)
+   *     └──→ testing-qa task (assigned to testing-qa, depends on code-review)
+   *
+   * Both evaluation tasks include the Generator's execution output as context.
+   *
+   * @returns IDs of created evaluation tasks, or null if pipeline skipped
+   */
+  async createEvaluationTasks(
+    generatorTask: TaskNode,
+    agentRole: string,
+    executionOutput: string,
+    allAgents: AgentInstance[],
+  ): Promise<{ reviewTaskId: string; qaTaskId: string } | null> {
+    // Gate: skip pipeline for Planner/Evaluator roles or simple tasks
+    if (!isGeneratorRole(agentRole)) {
+      console.log(`[Pipeline] Skipping evaluation for ${agentRole} task "${generatorTask.title}" — not a Generator role`);
+      return null;
+    }
+
+    // Gate: estimate complexity from description + execution output
+    const complexityEstimate = this.estimateComplexity(
+      (generatorTask.description || "") + "\n" + executionOutput,
+      generatorTask.title
+    );
+    if (complexityEstimate < PIPELINE_COMPLEXITY_THRESHOLD) {
+      console.log(`[Pipeline] Skipping evaluation for "${generatorTask.title}" — complexity ${complexityEstimate} < ${PIPELINE_COMPLEXITY_THRESHOLD}`);
+      return null;
+    }
+
+    // Find code-reviewer agent (prefer idle)
+    const reviewerAgent = this._findAgentByRole(allAgents, "code-reviewer");
+    // Find testing-qa agent (prefer idle)
+    const qaAgent = this._findAgentByRole(allAgents, "testing-qa");
+
+    if (!reviewerAgent || !qaAgent) {
+      console.warn(`[Pipeline] Cannot create evaluation tasks for "${generatorTask.title}" — missing evaluator agents (reviewer=${!!reviewerAgent}, qa=${!!qaAgent}). Will retry on next cycle.`);
+      return null;
+    }
+
+    // Build evaluation context: parent task title + execution output
+    const evalContext = this._buildEvalContext(generatorTask, executionOutput);
+
+    // ── Create code-review task ──────────────────────────────
+    const reviewTask = this.taskGraph.createTask({
+      project_id: generatorTask.project_id,
+      title: `${EVAL_TITLE_PREFIX} ${generatorTask.title}`,
+      description: `## 评估任务: 代码审查\n\n`
+        + `**审查对象:** ${generatorTask.title}\n\n`
+        + `**审查标准:** 按四维评分矩阵独立验收 Generator 的产出。`
+        + `每个发现必须附文件:行号 + 问题 + 修复建议。\n\n`
+        + `---\n### 审查上下文 (Generator 的产出)\n${evalContext}`,
+      priority: 1,
+      required_capabilities: ["testing"],
+      acceptance_criteria: `四维评分全部达标 (功能正确性 >= 4/5, 架构合规 >= 3/5, 代码质量 >= 3/5, 复用性 >= 3/5)。`
+        + `找到至少一个可验证的具体问题或确认无问题（附证据）。`,
+      max_retries: 2,
+      parent_task_id: generatorTask.id,
+    });
+
+    // Assign code-reviewer agent to the review task
+    const assignedReview = this.taskGraph.assignTask(reviewTask.id, reviewerAgent.id, reviewTask.version);
+    if (!assignedReview) {
+      console.warn(`[Pipeline] Failed to assign code-reviewer to review task for "${generatorTask.title}"`);
+    }
+
+    // ── Create testing-qa task (depends on code-review) ──────
+    const qaTask = this.taskGraph.createTask({
+      project_id: generatorTask.project_id,
+      title: `${QA_TITLE_PREFIX} ${generatorTask.title}`,
+      description: `## 评估任务: 端到端验证\n\n`
+        + `**验证对象:** ${generatorTask.title}\n\n`
+        + `**验证方法:** 按验收标准逐条验证功能正确性。`
+        + `覆盖四类路径：正常 + 边界 + 异常 + 并发。`
+        + `反橡皮图章三问：①代码真跑过？②找到至少一个问题？③有没有放水？\n\n`
+        + `---\n### 验证上下文 (Generator 的产出 + 审查结果)\n${evalContext}`,
+      priority: 2,
+      required_capabilities: ["testing"],
+      acceptance_criteria: `每条验收标准至少有对应的测试用例和 PASS/FAIL 结论。`
+        + `发现至少一个可验证的结果或确认通过（附证据）。`,
+      max_retries: 2,
+      parent_task_id: generatorTask.id,
+    });
+
+    // Assign testing-qa agent to the QA task
+    const assignedQa = this.taskGraph.assignTask(qaTask.id, qaAgent.id, qaTask.version);
+    if (!assignedQa) {
+      console.warn(`[Pipeline] Failed to assign testing-qa to QA task for "${generatorTask.title}"`);
+    }
+
+    // ── Set dependency: QA task depends on review task ──
+    this.taskGraph.addDependencies(qaTask.id, [reviewTask.id]);
+
+    console.log(`[Pipeline] Created evaluation tasks for "${generatorTask.title}":`);
+    console.log(`  - Review:  ${reviewTask.id.slice(0, 8)} → code-reviewer (${reviewerAgent.name})`);
+    console.log(`  - QA:      ${qaTask.id.slice(0, 8)} → testing-qa (${qaAgent.name}) [depends on review]`);
+
+    return { reviewTaskId: reviewTask.id, qaTaskId: qaTask.id };
+  }
+
+  /**
+   * Check if all evaluation tasks for a Generator task are Done.
+   * If both review + QA pass → promote parent Generator to Done.
+   * If any evaluation fails → promote parent Generator to InFix.
+   *
+   * Called after any task completes (may be an evaluation task).
+   */
+  async checkAndCompleteGeneratorTask(taskId: string): Promise<boolean> {
+    const task = this.taskGraph.getTask(taskId);
+    if (!task) return false;
+
+    // Only Generator tasks can be auto-completed by evaluations
+    const agent = await this._getAgentById(task.owner_agent_id);
+    const role = agent?.role ?? "";
+    if (!isGeneratorRole(role)) return false;
+
+    // Find child evaluation tasks
+    const children = this.taskGraph.getChildrenByParent(taskId);
+    if (children.length === 0) return false; // No evaluations created yet
+
+    // Check status of all children
+    const allDone = children.every(c => c.status === "Done");
+    const anyFailed = children.some(c => c.status === "InFix" || c.status === "Blocked");
+
+    if (anyFailed) {
+      // Evaluation failed → Generator goes to InFix
+      const fresh = this.taskGraph.getTask(taskId);
+      if (fresh && fresh.status !== "Done" && fresh.status !== "InFix") {
+        const failedChildren = children
+          .filter(c => c.status === "InFix" || c.status === "Blocked")
+          .map(c => `  - ${c.title} (${c.status}): ${c.error_message ?? "无错误信息"}`)
+          .join("\n");
+        this.taskGraph.updateTask(taskId, {
+          description: (task.description || "") + `\n\n---\n### ⚠️ 评估未通过\n${failedChildren}`,
+          status: "InFix",
+          version: fresh.version,
+        });
+        console.log(`[Pipeline] Generator "${task.title}" → InFix (evaluation failed)`);
+        return true;
+      }
+      return true;
+    }
+
+    if (allDone) {
+      // All evaluations passed → promote Generator to Done
+      const fresh = this.taskGraph.getTask(taskId);
+      if (fresh && fresh.status !== "Done") {
+        const childSummary = children
+          .map(c => `  - ✅ ${c.title}`)
+          .join("\n");
+        this.taskGraph.updateTask(taskId, {
+          description: (task.description || "") + `\n\n---\n### ✅ 3-Stage Pipeline 通过\n${childSummary}`,
+          status: "Done",
+          version: fresh.version,
+        });
+        console.log(`[Pipeline] Generator "${task.title}" → Done (all evaluations passed)`);
+        await this.propagateContext(taskId);
+        return true;
+      }
+      return true;
+    }
+
+    // Some children still in progress (Backlog/InDev/ReadyForTest)
+    return false;
+  }
+
+  /** Find an agent by role, preferring idle agents. */
+  private _findAgentByRole(agents: AgentInstance[], role: string): AgentInstance | null {
+    // Prefer idle agents
+    const idle = agents.find(a => a.role === role && a.status === "idle");
+    if (idle) return idle;
+    // Fall back to any agent with that role (busy agents may be re-used)
+    return agents.find(a => a.role === role) ?? null;
+  }
+
+  /** Create a Sprint Contract task for high-complexity projects.
+   *  Assigns to product-manager (preferred) or software-architect.
+   *  The Planner produces requirements/architecture docs that downstream tasks consume. */
+  private _createPlannerTask(
+    projectId: string, title: string, description: string, complexity: ComplexityReport
+  ): string | null {
+    const task = this.taskGraph.createTask({
+      project_id: projectId,
+      title: `Sprint Contract: ${title}`,
+      description: `作为 Planner，分析以下需求并输出 Sprint Contract:\n\n${description}\n\n复杂度: ${complexity.score}/10\n阶段: ${complexity.estimatedPhases.join(", ")}\n\n输出格式:\n## 需求分析\n## 架构方案\n## 接口契约\n## 任务拆解确认`,
+      priority: 0,
+      required_capabilities: ["architecture"],
+      acceptance_criteria: "Sprint Contract 通过编排官审查，下游任务可据此执行",
+      max_retries: 2,
+    });
+    console.log(`[Planner] Created Sprint Contract task ${task.id.slice(0, 8)} for "${title}"`);
+    return task.id;
+  }
+
+  /** Get a single agent by ID from the database. */
+  private async _getAgentById(agentId: string | null): Promise<AgentInstance | null> {
+    if (!agentId) return null;
+    const { getDb } = await import("../db/connection.js");
+    const db = getDb();
+    const stmt = db.prepare("SELECT * FROM agents WHERE id = ?");
+    stmt.bind([agentId]);
+    let agent: AgentInstance | null = null;
+    if (stmt.step()) {
+      const row = stmt.getAsObject() as any;
+      agent = {
+        id: row.id, project_id: row.project_id, name: row.name, role: row.role,
+        runtime: row.runtime, model: row.model, status: row.status,
+        worktree_path: row.worktree_path, current_task_id: row.current_task_id,
+        capabilities: JSON.parse(row.capabilities || "[]"),
+        last_heartbeat: row.last_heartbeat, permission_mode: row.permission_mode,
+        pid: row.pid, created_at: row.created_at,
+      };
+    }
+    stmt.free();
+    return agent;
+  }
+
+  /** Build evaluation context from the Generator task's output. */
+  private _buildEvalContext(generatorTask: TaskNode, executionOutput: string): string {
+    const parts: string[] = [];
+    parts.push(`**父任务:** ${generatorTask.title}`);
+    if (generatorTask.acceptance_criteria) {
+      parts.push(`**验收标准:** ${generatorTask.acceptance_criteria}`);
+    }
+    parts.push(`**执行输出 (摘要):** ${executionOutput.slice(0, 4000)}`);
+    return parts.join("\n\n");
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // 4️⃣  完整编排 — 输入一句话需求，自动完成全部流程
   // ═══════════════════════════════════════════════════════════
 
@@ -395,9 +631,18 @@ export class Orchestrator {
     // Step 2: AI decompose into sub-tasks
     const decomposition = await this.decomposeTask(title, description, complexity);
 
-    // Step 3: Create all sub-tasks in TaskGraph with DAG dependencies
+    // Step 3: Create planner task (Sprint Contract) for high-complexity tasks
+    let plannerTaskId: string | null = null;
+    if (complexity.score >= 7) {
+      plannerTaskId = this._createPlannerTask(projectId, title, description, complexity);
+      if (plannerTaskId) {
+        console.log(`[orchestrate] Created Planner task for "${title}" (score=${complexity.score})`);
+      }
+    }
+
+    // Step 4: Create all sub-tasks in TaskGraph with DAG dependencies
     const taskIds: string[] = [];
-    const idMap = new Map<number, string>(); // index → taskId
+    const idMap = new Map<number, string>(); // index -> taskId
 
     for (let i = 0; i < decomposition.subTasks.length; i++) {
       const st = decomposition.subTasks[i]!;
@@ -414,7 +659,14 @@ export class Orchestrator {
       idMap.set(i, task.id);
     }
 
-    // Second pass: set up dependencies
+    // If planner task exists, all implementation tasks depend on it
+    if (plannerTaskId) {
+      for (const tid of taskIds) {
+        this.taskGraph.addDependencies(tid, [plannerTaskId]);
+      }
+    }
+
+    // Set up AI-decomposed dependencies
     for (let i = 0; i < decomposition.subTasks.length; i++) {
       const st = decomposition.subTasks[i]!;
       if (st.dependsOn.length > 0) {
@@ -428,46 +680,8 @@ export class Orchestrator {
       }
     }
 
-    // Step 3.5: Create evaluator review tasks for each implementation task
-    const evaluatorTaskIds = this._createReviewTasks(projectId, taskIds);
-    const allTaskIds = [...taskIds, ...evaluatorTaskIds];
-
+    const allTaskIds = plannerTaskId ? [plannerTaskId, ...taskIds] : taskIds;
     return { complexity, decomposition, taskIds: allTaskIds };
-  }
-
-  /**
-   * Create a paired review task for each implementation task.
-   * Review tasks are assigned to evaluator agents (code-reviewer, testing-qa, security-engineer)
-   * and depend on their parent implementation task.
-   * This ensures the 3-phase Planner→Generator→Evaluator pipeline actually runs.
-   */
-  private _createReviewTasks(projectId: string, implTaskIds: string[]): string[] {
-    const reviewIds: string[] = [];
-    for (const implId of implTaskIds) {
-      const implTask = this.taskGraph.getTask(implId);
-      if (!implTask) continue;
-
-      // Skip if this task is already a review/testing task
-      if (implTask.title.startsWith("Review:")) continue;
-
-      const reviewTask = this.taskGraph.createTask({
-        project_id: projectId,
-        title: `Review: ${implTask.title}`,
-        description: `审查以下任务的产出:\n\n${implTask.title}\n${implTask.description?.slice(0, 500) ?? ""}`,
-        priority: 2, // lower priority than implementation
-        required_capabilities: ["testing"], // matches code-reviewer (testing), testing-qa (testing), security-engineer (security)
-        acceptance_criteria: `验证 ${implTask.title} 的产出满足验收标准`,
-        max_retries: 2,
-      });
-
-      // Review depends on implementation completion
-      this.taskGraph.addDependencies(reviewTask.id, [implId]);
-      reviewIds.push(reviewTask.id);
-    }
-    if (reviewIds.length > 0) {
-      console.log(`[orchestrate] Created ${reviewIds.length} evaluator review tasks`);
-    }
-    return reviewIds;
   }
 
   /** Like orchestrate() but reuses a pre-computed complexity to skip re-analysis */
@@ -498,9 +712,8 @@ export class Orchestrator {
         }
       }
     }
-    const evaluatorTaskIds = this._createReviewTasks(projectId, taskIds);
-    const allTaskIds = [...taskIds, ...evaluatorTaskIds];
-    return { complexity, decomposition, taskIds: allTaskIds };
+    // Evaluation tasks created dynamically after Generator execution (see autoExecute loop).
+    return { complexity, decomposition, taskIds };
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -609,7 +822,7 @@ export class Orchestrator {
         }
       }
 
-      // Process results + run quality gates for each completed execution
+      // Process results — 3-Stage Pipeline routing
       for (let i = 0; i < ready.length; i++) {
         const taskId = ready[i]!;
         const result = results[i];
@@ -618,41 +831,156 @@ export class Orchestrator {
           const task = this.taskGraph.getTask(taskId);
           if (!task) continue;
 
-          // ── Quality Gate Chain ──
-          const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
+          const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
+          const role = agent?.role ?? "";
 
-          if (gateReport?.overallPassed) {
-            // ✅ All gates passed → promote to Done
-            console.log(`[QualityGate] ${gateReport.summary}`);
+          // ── 3-Stage Pipeline: Generator → Evaluator(s) → Done ──
+          if (isGeneratorRole(role)) {
+            // Generator finished writing code → create evaluation tasks
+            // Override ReadyForTest (set by executeTask) back to InDev — generator
+            // stays InDev until both code-review and testing-qa pass.
             const fresh = this.taskGraph.getTask(taskId);
-            if (fresh) {
-              this.taskGraph.updateTask(taskId, { status: "Done", version: fresh.version });
-            }
-            remaining.delete(taskId);
-            completed++;
-            await this.propagateContext(taskId);
-          } else if (gateReport) {
-            // ⚠️ Gates failed → move to InFix for retry
-            console.log(`[QualityGate] ${gateReport.summary}`);
-            const failedGates = gateReport.gates
-              .filter(g => !g.passed)
-              .map(g => `  - [${g.gate}] ${g.findings.join("; ") || "检查未通过"}`)
-              .join("\n");
-            const fresh = this.taskGraph.getTask(taskId);
-            if (fresh) {
+            if (fresh && fresh.status !== "InDev" && fresh.status !== "Done") {
               this.taskGraph.updateTask(taskId, {
-                description: (task.description || "") + `\n\n---\n### ⚠️ 质量门禁未通过\n${failedGates}`,
-                status: "InFix",
+                status: "InDev",
                 version: fresh.version,
               });
             }
-            remaining.delete(taskId);
-            blocked++;
+
+            const evalResult = await this.createEvaluationTasks(
+              task, role, result.value.output, allAgents
+            );
+
+            if (evalResult) {
+              // Add evaluation tasks to the execution loop
+              remaining.add(evalResult.reviewTaskId);
+              remaining.add(evalResult.qaTaskId);
+              // Refresh agentMap with evaluator agents (they may have been picked up)
+              const reviewAgent = this._findAgentByRole(allAgents, "code-reviewer");
+              const qaAgent = this._findAgentByRole(allAgents, "testing-qa");
+              if (reviewAgent) agentMap.set(reviewAgent.id, reviewAgent);
+              if (qaAgent) agentMap.set(qaAgent.id, qaAgent);
+              // Generator stays in remaining — polled every cycle until evaluations pass
+              console.log(`[Pipeline] Generator "${task.title}" awaiting evaluation (2 evaluators dispatched)`);
+            } else {
+              // No evaluators available or complexity too low → fallback to quality gate
+              console.log(`[Pipeline] Evaluation skipped for "${task.title}" — falling back to quality gate`);
+              const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
+              if (gateReport?.overallPassed) {
+                const f = this.taskGraph.getTask(taskId);
+                if (f) this.taskGraph.updateTask(taskId, { status: "Done", version: f.version });
+                remaining.delete(taskId);
+                completed++;
+                await this.propagateContext(taskId);
+              } else {
+                remaining.delete(taskId);
+                blocked++;
+              }
+            }
+          } else if (isEvaluatorRole(role)) {
+            // Evaluator finished reviewing/testing → quality gate, then check parent
+            const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
+
+            if (gateReport?.overallPassed) {
+              console.log(`[QualityGate] ${gateReport.summary}`);
+              const fresh = this.taskGraph.getTask(taskId);
+              if (fresh) {
+                this.taskGraph.updateTask(taskId, { status: "Done", version: fresh.version });
+              }
+              remaining.delete(taskId);
+              completed++;
+              await this.propagateContext(taskId);
+
+              // Check if parent Generator can now be completed
+              if (task.parent_task_id) {
+                const parentPromoted = await this.checkAndCompleteGeneratorTask(task.parent_task_id);
+                if (parentPromoted) {
+                  remaining.delete(task.parent_task_id);
+                  completed++;
+                }
+              }
+            } else if (gateReport) {
+              // Evaluation failed → move evaluator to InFix
+              console.log(`[QualityGate] ${gateReport.summary}`);
+              const failedGates = gateReport.gates
+                .filter(g => !g.passed)
+                .map(g => `  - [${g.gate}] ${g.findings.join("; ") || "检查未通过"}`)
+                .join("\n");
+              const fresh = this.taskGraph.getTask(taskId);
+              if (fresh) {
+                this.taskGraph.updateTask(taskId, {
+                  description: (task.description || "") + `\n\n---\n### ⚠️ 质量门禁未通过\n${failedGates}`,
+                  status: "InFix",
+                  version: fresh.version,
+                });
+              }
+              remaining.delete(taskId);
+              blocked++;
+
+              // Cascade: evaluator failed → reassign (goes back to Backlog via failTask if retries remain)
+              // Also check parent — if this eval is permanently blocked, parent goes to InFix
+              if (task.parent_task_id) {
+                await this.checkAndCompleteGeneratorTask(task.parent_task_id);
+                // Parent may now be InFix — remove from remaining if so
+                const parent = this.taskGraph.getTask(task.parent_task_id);
+                if (parent && (parent.status === "InFix" || parent.status === "Blocked" || parent.status === "Done")) {
+                  remaining.delete(task.parent_task_id);
+                  if (parent.status === "Done") completed++;
+                  else blocked++;
+                }
+              }
+            } else {
+              // No gate report → promote to Done anyway
+              const fresh = this.taskGraph.getTask(taskId);
+              if (fresh) {
+                this.taskGraph.updateTask(taskId, { status: "Done", version: fresh.version });
+              }
+              remaining.delete(taskId);
+              completed++;
+              await this.propagateContext(taskId);
+
+              if (task.parent_task_id) {
+                const parentPromoted = await this.checkAndCompleteGeneratorTask(task.parent_task_id);
+                if (parentPromoted) {
+                  remaining.delete(task.parent_task_id);
+                  completed++;
+                }
+              }
+            }
           } else {
-            // No gate report (gate service errored) → promote to Done anyway
-            remaining.delete(taskId);
-            completed++;
-            await this.propagateContext(taskId);
+            // Planner / unknown role → legacy quality gate path
+            const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
+
+            if (gateReport?.overallPassed) {
+              console.log(`[QualityGate] ${gateReport.summary}`);
+              const fresh = this.taskGraph.getTask(taskId);
+              if (fresh) {
+                this.taskGraph.updateTask(taskId, { status: "Done", version: fresh.version });
+              }
+              remaining.delete(taskId);
+              completed++;
+              await this.propagateContext(taskId);
+            } else if (gateReport) {
+              console.log(`[QualityGate] ${gateReport.summary}`);
+              const failedGates = gateReport.gates
+                .filter(g => !g.passed)
+                .map(g => `  - [${g.gate}] ${g.findings.join("; ") || "检查未通过"}`)
+                .join("\n");
+              const fresh = this.taskGraph.getTask(taskId);
+              if (fresh) {
+                this.taskGraph.updateTask(taskId, {
+                  description: (task.description || "") + `\n\n---\n### ⚠️ 质量门禁未通过\n${failedGates}`,
+                  status: "InFix",
+                  version: fresh.version,
+                });
+              }
+              remaining.delete(taskId);
+              blocked++;
+            } else {
+              remaining.delete(taskId);
+              completed++;
+              await this.propagateContext(taskId);
+            }
           }
         } else {
           // Execution failed
