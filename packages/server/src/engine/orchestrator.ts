@@ -113,16 +113,21 @@ function extractJson(output: string): any {
 // ── Capability inference (keyword → skill module mapping) ───
 // Used when AI decomposition fails, so tasks still get skill injection.
 
+// ── Canonical 5-tag capability vocabulary ──
+// These MUST match seed.ts ROLE_CAPABILITY_MAP tags.
+// Legacy 9-tag keywords are merged: database/api/backend/devops → architecture
 const CAPABILITY_KEYWORDS: Array<{ cap: string; keywords: RegExp[] }> = [
-  { cap: "database",   keywords: [/数据库|database|表|table|sql|migration|迁移|索引|index|查询|query|存储|store/i] },
-  { cap: "api",        keywords: [/api|接口|端点|endpoint|rest|路由|route|请求|request|响应|response/i] },
-  { cap: "backend",    keywords: [/后端|backend|服务端|server|逻辑|logic|业务|business|处理|handler/i] },
   { cap: "frontend",   keywords: [/前端|frontend|ui|界面|页面|page|组件|component|react|vue|样式|css|html/i] },
-  { cap: "security",   keywords: [/安全|security|认证|auth|登录|login|注册|register|密码|password|token|jwt|权限|permission|加密|encrypt|哈希|hash/i] },
+  { cap: "architecture",keywords: [
+    /架构|architect|设计|design|模块|module|系统|system|模式|pattern|重构|refactor/i,
+    /数据库|database|表|table|sql|migration|迁移|索引|index|查询|query|存储|store/i,
+    /api|接口|端点|endpoint|rest|路由|route|请求|request|响应|response/i,
+    /后端|backend|服务端|server|逻辑|logic|业务|business|处理|handler/i,
+    /部署|deploy|构建|build|ci|cd|docker|容器|环境|env|配置|config|脚本|script/i,
+  ]},
   { cap: "testing",    keywords: [/测试|test|单元测试|unit test|验证|verify|断言|assert|mock|qa/i] },
-  { cap: "devops",     keywords: [/部署|deploy|构建|build|ci|cd|docker|容器|环境|env|配置|config|脚本|script/i] },
   { cap: "performance",keywords: [/性能|performance|优化|optimize|缓存|cache|加速|加速|速度|speed|慢|slow/i] },
-  { cap: "architecture",keywords: [/架构|architect|设计|design|模块|module|系统|system|模式|pattern|重构|refactor/i] },
+  { cap: "security",   keywords: [/安全|security|认证|auth|登录|login|注册|register|密码|password|token|jwt|权限|permission|加密|encrypt|哈希|hash/i] },
 ];
 
 function inferCapabilities(title: string, description: string): string[] {
@@ -133,7 +138,7 @@ function inferCapabilities(title: string, description: string): string[] {
       caps.push(cap);
     }
   }
-  return caps.length > 0 ? caps : ["backend"]; // default to backend if nothing matches
+  return caps.length > 0 ? caps : ["architecture"]; // default to architecture
 }
 
 // ── Orchestrator ───────────────────────────────────────────
@@ -211,16 +216,13 @@ export class Orchestrator {
     const prompt = `你是一个软件架构师。把以下需求拆解成具体的子任务。
 返回纯 JSON（不要 markdown 代码块）。
 
-能力标签必须从以下列表选择（可多选）:
-- database   (数据库/表设计/查询/迁移)
-- api        (API设计/REST/接口)
-- backend    (后端逻辑/业务规则)
-- frontend   (前端/UI/组件/样式)
-- security   (安全/认证/授权/加密)
-- testing    (测试/验证/QA)
-- devops     (部署/CI/CD/构建)
-- performance (性能优化/缓存)
-- architecture (系统设计/模块划分)
+能力标签必须从以下 5 个标签中选择（可多选，不要自己编造）:
+能力标签必须从以下 5 个标签中选择（可多选，不要自己编造）:
+- frontend      (前端/UI/组件/样式/交互)
+- architecture  (架构设计/后端逻辑/API/数据库/DevOps/模块划分)
+- testing       (测试/验证/QA/代码审查)
+- performance   (性能优化/缓存/加速)
+- security      (安全/认证/授权/加密/权限)
 
 {
   "subTasks": [
