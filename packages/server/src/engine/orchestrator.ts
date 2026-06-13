@@ -562,7 +562,7 @@ export class Orchestrator {
   }
 
   /** Create a Sprint Contract task for high-complexity projects.
-   *  Assigns to product-manager (preferred) or software-architect.
+   *  Assigns to orchestrator / product-manager / software-architect (all have architecture cap).
    *  The Planner produces requirements/architecture docs that downstream tasks consume. */
   private _createPlannerTask(
     projectId: string, title: string, description: string, complexity: ComplexityReport
