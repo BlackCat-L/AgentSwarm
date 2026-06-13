@@ -149,24 +149,12 @@ if not exist "node_modules" (
         exit /b 1
     )
     echo   DONE dependencies installed
+) else if not exist "node_modules\.pnpm" (
+    echo         Partial install detected, repairing...
+    call pnpm install
+    echo   DONE dependencies repaired
 ) else (
-    rem Check if package.json or pnpm-lock.yaml changed since last install
-    set "NEED_INSTALL=0"
-    for /f "tokens=*" %%f in ('dir /b /o-d node_modules\.pnpm 2^>nul ^| head -1') do set "LATEST_MOD=%%f"
-    if not defined LATEST_MOD set "NEED_INSTALL=1"
-
-    if "!NEED_INSTALL!"=="1" (
-        echo         Dependencies may be stale, updating...
-        call pnpm install
-        if !errorlevel! neq 0 (
-            echo   FAIL pnpm install failed
-            pause
-            exit /b 1
-        )
-        echo   DONE dependencies updated
-    ) else (
-        echo   SKIP node_modules up to date (already installed^)
-    )
+    echo   SKIP node_modules present (already installed^)
 )
 
 rem =================================================================
