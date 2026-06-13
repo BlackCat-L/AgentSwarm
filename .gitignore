@@ -67,6 +67,17 @@ packages/server/src/routes/status-extended.ts
 packages/server/subtasks.json
 packages/server/tmp/
 
+# ── Personal scripts ─────────────────────────────────────
+*.ps1
+relocate.bat
+temp-clean.bat
+index.html
+
+# ── Temp fix files ───────────────────────────────────────
+packages/server/*-fix.txt
+packages/server/*-fix.py
+packages/server/tasks.json
+
 # ── Misc ────────────────────────────────────────────────
 *.log
 .tmp/
