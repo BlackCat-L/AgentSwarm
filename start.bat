@@ -6,81 +6,107 @@ cd /d "%~dp0"
 rem ── Force UTF-8 codepage (prevents Chinese garbled text) ──
 chcp 65001 >nul 2>&1
 
+rem ── Deployment tracking ──
+set "STAMP=%USERPROFILE%\.claude\.swarm-deploy-stamp"
+set "NEED_RESTART=0"
+set "NEW_COUNT=0"
+
 echo.
 echo   Agent Swarm - Dark Factory
 echo   ==========================
 echo.
 
-rem --- Step 1: Node.js ------------------------------------
+rem =================================================================
+rem  Step 1: Node.js — skip if already installed
+rem =================================================================
 echo   [1/5] Node.js...
-where node >nul 2>&1
-if %errorlevel% neq 0 goto install_node
-for /f "tokens=*" %%i in ('node --version') do echo   OK Node %%i
-goto check_pnpm
 
-:install_node
-echo   Node.js not found, trying auto-install...
+where node >nul 2>&1
+if %errorlevel% equ 0 (
+    for /f "tokens=*" %%i in ('node --version') do echo   SKIP Node %%i (already installed^)
+    goto check_pnpm
+)
+
+echo         Not found, trying auto-install...
+
 where winget >nul 2>&1
 if %errorlevel% equ 0 (
     winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
     if !errorlevel! equ 0 (
-        echo   Node.js installed! Please re-run start.bat.
+        echo   DONE Node.js installed! Please re-run start.bat.
         pause
         exit /b 0
     )
 )
+
 where choco >nul 2>&1
 if %errorlevel% equ 0 (
     choco install nodejs-lts -y
     if !errorlevel! equ 0 (
-        echo   Node.js installed! Please re-run start.bat.
+        echo   DONE Node.js installed! Please re-run start.bat.
         pause
         exit /b 0
     )
 )
-echo   Cannot auto-install, opening download page...
-start https://nodejs.org/en/download
-echo   Please install Node.js LTS, then re-run start.bat
+
+echo   FAIL Cannot auto-install Node.js
+echo   Please install manually: https://nodejs.org/en/download
 pause
 exit /b 1
 
-rem --- Step 2: pnpm ---------------------------------------
+rem =================================================================
+rem  Step 2: pnpm — skip if already installed
+rem =================================================================
 :check_pnpm
 echo   [2/5] pnpm...
-where pnpm >nul 2>&1
-if %errorlevel% equ 0 goto pnpm_ok
 
-echo   Installing pnpm...
+where pnpm >nul 2>&1
+if %errorlevel% equ 0 (
+    for /f "tokens=*" %%i in ('pnpm --version') do echo   SKIP pnpm %%i (already installed^)
+    goto sync_skills
+)
+
+echo         Installing pnpm...
 
 rem Method 1: npm global install
-call npm install -g pnpm
+call npm install -g pnpm 2>nul
 where pnpm >nul 2>&1
-if %errorlevel% equ 0 goto pnpm_ok
+if %errorlevel% equ 0 (
+    echo   DONE pnpm installed via npm
+    goto sync_skills
+)
 
-rem Method 2: corepack (built into Node.js 16+)
-echo   Trying corepack...
+rem Method 2: corepack
+echo         Trying corepack...
 call corepack enable pnpm >nul 2>&1
 where pnpm >nul 2>&1
-if %errorlevel% equ 0 goto pnpm_ok
+if %errorlevel% equ 0 (
+    echo   DONE pnpm installed via corepack
+    goto sync_skills
+)
 
-rem Method 3: add npm global prefix to PATH, then retry
-for /f "tokens=*" %%p in ('npm config get prefix') do set "NPM_PREFIX=%%p"
+rem Method 3: add npm prefix to PATH
+for /f "tokens=*" %%p in ('npm config get prefix 2^>nul') do set "NPM_PREFIX=%%p"
 if defined NPM_PREFIX (
     set "PATH=!NPM_PREFIX!;!PATH!"
     where pnpm >nul 2>&1
-    if !errorlevel! equ 0 goto pnpm_ok
+    if !errorlevel! equ 0 (
+        echo   DONE pnpm found in npm prefix
+        goto sync_skills
+    )
 )
 
-echo   ERROR: Failed to install pnpm
-echo   Please install manually: npm install -g pnpm
-echo   Or enable via Node.js corepack: corepack enable pnpm
+echo   FAIL Cannot install pnpm
+echo   Please run: npm install -g pnpm
 pause
 exit /b 1
 
-:pnpm_ok
-for /f "tokens=*" %%i in ('pnpm --version') do echo   OK pnpm %%i
-
-rem --- Step 3: Sync skills to global (~/.claude/skills/) ----
+rem =================================================================
+rem  Step 3: Sync skills to global (~/.claude/skills/)
+rem   - New skills are copied; existing ones are skipped
+rem   - On re-run: reports "N already present, 0 new"
+rem =================================================================
+:sync_skills
 echo   [3/5] Skills...
 
 set "GLOBAL_SKILLS=%USERPROFILE%\.claude\skills"
@@ -88,33 +114,64 @@ set "LOCAL_SKILLS=%~dp0.claude\skills"
 
 if not exist "%GLOBAL_SKILLS%" mkdir "%GLOBAL_SKILLS%" 2>nul
 
-echo     Syncing skills to global...
-set "SKILL_COUNT=0"
+set "SKILL_NEW=0"
+set "SKILL_SKIP=0"
+
 for /d %%d in ("%LOCAL_SKILLS%\*") do (
     set "SKILL_NAME=%%~nxd"
     set "DEST=%GLOBAL_SKILLS%\!SKILL_NAME!"
-    if not exist "!DEST!" (
+    if exist "!DEST!" (
+        set /a SKILL_SKIP+=1
+    ) else (
         xcopy "%%d\*" "!DEST!\" /E /I /Q /Y >nul 2>&1
-        if !errorlevel! equ 0 set /a SKILL_COUNT+=1
+        if !errorlevel! equ 0 set /a SKILL_NEW+=1
     )
 )
-echo   OK Synced !SKILL_COUNT! new skills to global (%GLOBAL_SKILLS%)
 
-rem --- Step 4: Dependencies -------------------------------
+if !SKILL_NEW! gtr 0 (
+    echo   DONE !SKILL_NEW! new skills synced, !SKILL_SKIP! already present
+    set "NEW_COUNT=!SKILL_NEW!"
+) else (
+    echo   SKIP All !SKILL_SKIP! skills already present (up to date^)
+)
+
+rem =================================================================
+rem  Step 4: Dependencies — skip if node_modules exists AND unchanged
+rem =================================================================
 echo   [4/5] Dependencies...
+
 if not exist "node_modules" (
-    echo   First run: installing packages...
+    echo         First run: pnpm install...
     call pnpm install
     if !errorlevel! neq 0 (
-        echo   ERROR: pnpm install failed
+        echo   FAIL pnpm install failed — check network or run manually
         pause
         exit /b 1
     )
+    echo   DONE dependencies installed
 ) else (
-    echo   OK dependencies ready
+    rem Check if package.json or pnpm-lock.yaml changed since last install
+    set "NEED_INSTALL=0"
+    for /f "tokens=*" %%f in ('dir /b /o-d node_modules\.pnpm 2^>nul ^| head -1') do set "LATEST_MOD=%%f"
+    if not defined LATEST_MOD set "NEED_INSTALL=1"
+
+    if "!NEED_INSTALL!"=="1" (
+        echo         Dependencies may be stale, updating...
+        call pnpm install
+        if !errorlevel! neq 0 (
+            echo   FAIL pnpm install failed
+            pause
+            exit /b 1
+        )
+        echo   DONE dependencies updated
+    ) else (
+        echo   SKIP node_modules up to date (already installed^)
+    )
 )
 
-rem --- Step 5: Start --------------------------------------
+rem =================================================================
+rem  Step 5: Start services
+rem =================================================================
 echo   [5/5] Starting...
 echo.
 echo   API  http://localhost:5120
@@ -122,6 +179,12 @@ echo   Web  http://localhost:5173
 echo   Ctrl+C to stop
 echo.
 
+rem ── Save deploy stamp ──
+echo %date% %time% > "%STAMP%"
+
+rem ── Open browser ──
 start "" http://localhost:5173
+
+rem ── Launch (stable mode — no tsx watch, agents won't crash server) ──
 call pnpm dev:stable
 pause
