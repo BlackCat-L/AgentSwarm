@@ -91,8 +91,8 @@ export default function App() {
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           {[
-            ["数据库版本", status ? `v${status.db.currentVersion}` : "—"],
-            ["总任务数", String(stats?.total ?? "—")],
+            ["总任务", String(stats?.total ?? "—")],
+            ["已完成", String(stats?.done ?? "—")],
             ["活跃 Agent", String(agents?.filter((a: any) => a.status === "busy").length ?? "—")],
             ["完成率", stats?.completionRate ?? "—"],
           ].map(([label, value]) => (

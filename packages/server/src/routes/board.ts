@@ -50,6 +50,7 @@ router.get("/stats", (c) => {
 
   return c.json({
     total,
+    done: byStatus["Done"] ?? 0,
     byStatus,
     blockedTasks: blocked,
     completionRate: total > 0 ? ((byStatus["Done"] ?? 0) / total * 100).toFixed(1) + "%" : "0%",
