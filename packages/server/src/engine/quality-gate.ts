@@ -25,7 +25,7 @@ export interface QualityReport {
   summary: string;
 }
 
-async function quickAsk(prompt: string, model: string = "deepseek-v4-pro[1m]"): Promise<string> {
+async function quickAsk(prompt: string, model: string = "deepseek-v4-flash"): Promise<string> {
   const result = await spawnClaudeOnce({
     prompt,
     model,
@@ -45,17 +45,38 @@ export class QualityGateService {
   async runGates(task: TaskNode, output: string): Promise<QualityReport> {
     const gates: GateResult[] = [];
     const isComplex = (task.description?.length ?? 0) > 500;
+    const hasRetried = (task.retry_count ?? 0) > 0;
+    const isEvaluatorTask = task.title.startsWith("审查:") || task.title.startsWith("Review:") || task.title.startsWith("验证:") || task.title.startsWith("Security Review:");
+    const isTrivial = output.length < 500 && !isComplex;
 
-    // ── GATE 1: Acceptance (always runs) ──────────────────────
-    gates.push(await this.gateAcceptance(task, output));
+    // ── COST SAVING: Skip gate spawns for evaluator tasks and trivial tasks ──
+    if (isTrivial && hasRetried) {
+      // Trivial retried task — auto-pass all gates
+      return { taskId: task.id, gates: [{ passed: true, gate: "acceptance", findings: [], suggestion: "简单已重试任务，自动通过" }], overallPassed: true, summary: "skip: trivial retried" };
+    }
+    if (isEvaluatorTask) {
+      // Evaluator tasks are themselves quality checks — skip redundant gate spawn
+      return { taskId: task.id, gates: [{ passed: true, gate: "acceptance", findings: [], suggestion: "评估任务，跳过质量门禁" }], overallPassed: true, summary: "skip: evaluator task" };
+    }
 
-    // ── GATE 2: Review (complex tasks only) ───────────────────
-    if (isComplex && task.acceptance_criteria) {
+    // ── GATE 1: Acceptance (always runs, auto-pass after 1 retry) ──
+    if (hasRetried) {
+      gates.push({ passed: true, gate: "acceptance", findings: [], suggestion: `已重试 ${task.retry_count} 次，自动通过验收` });
+    } else if (isTrivial) {
+      // Trivial task — inline check instead of Claude Code spawn
+      const passed = output.length > 0 && !output.includes("[stderr]");
+      gates.push({ passed, gate: "acceptance", findings: passed ? [] : ["输出为空或含错误"], suggestion: passed ? undefined : "请检查执行输出" });
+    } else {
+      gates.push(await this.gateAcceptance(task, output));
+    }
+
+    // ── GATE 2: Review (complex tasks only, skip after retry) ──
+    if (isComplex && task.acceptance_criteria && !hasRetried) {
       gates.push(await this.gateReview(task, output));
     }
 
-    // ── GATE 3: Simplify (code tasks with >200 lines output) ──
-    if (output.length > 2000) {
+    // ── GATE 3: Simplify (code tasks with >2000 chars output, skip after retry) ──
+    if (output.length > 2000 && !hasRetried) {
       gates.push(await this.gateSimplify(output));
     }
 

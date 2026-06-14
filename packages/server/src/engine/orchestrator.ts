@@ -174,6 +174,10 @@ function isEvaluatorRole(role: string): boolean {
 /** Maximum number of Claude Code processes spawned concurrently */
 const MAX_CONCURRENT_SPAWNS = 2;
 
+/** Hard limits to prevent token waste from over-decomposition */
+const MAX_PHASES = 4;        // cap estimated phases (prevents 20-phase explosions)
+const MAX_SUBTASKS = 5;      // cap AI-decomposed subtasks per /swarm
+
 export class Orchestrator {
   private taskGraph: TaskGraph;
   private scorer: CapabilityScorer;
@@ -215,11 +219,12 @@ export class Orchestrator {
       const output = await askClaude(prompt);
       try {
         const json = extractJson(output);
+        const phases = (json.estimatedPhases ?? []) as string[];
         return {
           score: Math.max(1, Math.min(10, json.score ?? 5)),
           reasoning: json.reasoning ?? "AI 分析",
           suggestedAgentCount: Math.max(1, Math.min(5, json.suggestedAgentCount ?? 2)),
-          estimatedPhases: json.estimatedPhases ?? [],
+          estimatedPhases: phases.slice(0, MAX_PHASES), // cap to prevent over-decomposition
         };
       } catch {
         // JSON extraction failed → fallback with raw output snippet
@@ -245,6 +250,7 @@ export class Orchestrator {
     const prompt = `你是一个软件架构师。把以下需求拆解成具体的子任务。
 返回纯 JSON（不要 markdown 代码块）。
 **输出语言：简体中文。** 标题、描述、验收标准全部用中文写。
+**最多创建 4 个子任务。** 合并相似工作，不要过度拆分。
 
 能力标签必须从以下 5 个标签中选择。**每个子任务最多选 2 个最相关的标签，精准匹配，不要全部打上：**
 - frontend      (前端/UI/组件/样式/交互)
@@ -280,14 +286,18 @@ export class Orchestrator {
       const output = await askClaude(prompt);
       try {
         const json = extractJson(output);
+        const raw = (json.subTasks ?? []).map((t: any) => ({
+          title: t.title ?? "子任务",
+          description: t.description ?? "",
+          requiredCapabilities: t.requiredCapabilities ?? [],
+          dependsOn: t.dependsOn ?? [],
+          acceptanceCriteria: t.acceptanceCriteria ?? "",
+        }));
+        if (raw.length > MAX_SUBTASKS) {
+          console.log(`[decomposeTask] Capping ${raw.length} subTasks to ${MAX_SUBTASKS} (MAX_SUBTASKS limit)`);
+        }
         return {
-          subTasks: (json.subTasks ?? []).map((t: any) => ({
-            title: t.title ?? "子任务",
-            description: t.description ?? "",
-            requiredCapabilities: t.requiredCapabilities ?? [],
-            dependsOn: t.dependsOn ?? [],
-            acceptanceCriteria: t.acceptanceCriteria ?? "",
-          })),
+          subTasks: raw.slice(0, MAX_SUBTASKS),
           estimatedTotalMinutes: json.estimatedTotalMinutes ?? 30,
           recommendedModel: json.recommendedModel ?? "deepseek-v4-pro[1m]",
         };
@@ -406,6 +416,13 @@ export class Orchestrator {
 
     // For Generator tasks: always create evaluations. The keyword estimator
     // is too coarse to reliably gate code quality review.
+
+    // Dedup: if evaluation children already exist, don't create duplicates
+    const existingChildren = this.taskGraph.getChildrenByParent(generatorTask.id);
+    if (existingChildren.length > 0) {
+      console.log(`[Pipeline] Skipping eval for "${generatorTask.title}" — ${existingChildren.length} children exist`);
+      return null;
+    }
 
     // Find code-reviewer agent (prefer idle)
     const reviewerAgent = this._findAgentByRole(allAgents, "code-reviewer");
