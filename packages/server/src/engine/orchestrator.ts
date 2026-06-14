@@ -155,7 +155,7 @@ const GENERATOR_ROLES = new Set([
 
 /** Agent roles that evaluate code — they review/test Generator output */
 const EVALUATOR_ROLES = new Set([
-  "code-reviewer", "testing-qa", "security-engineer",
+  "code-reviewer", "testing-qa", "security-engineer", "reality-checker",
 ]);
 
 /** Evaluator task title prefixes for identification */
@@ -167,6 +167,20 @@ function isGeneratorRole(role: string): boolean {
 
 function isEvaluatorRole(role: string): boolean {
   return EVALUATOR_ROLES.has(role);
+}
+
+/** Check if generator output contains self-verification evidence.
+ *  If the agent ran tsc/diff/grep and reported results, we can skip
+ *  the external evaluator spawn — saves one Claude Code call per task. */
+function hasSelfVerification(output: string): boolean {
+  // Must have the verification section header
+  const hasSection = /自验证证据|验证结果|Verification|### Step 4/.test(output);
+  // Must have command-like output (tsc, build, test, diff, grep)
+  const hasCommand = /```bash|```\n|tsc|npm run|error TS\d+|0 error|git diff|grep -/.test(output);
+  // Must have at least one explicit PASS or FAIL marker
+  const hasVerdict = /PASS|FAIL|✅|❌|通过|未通过|0 error/.test(output);
+
+  return hasSection && hasCommand && hasVerdict;
 }
 
 // ── Orchestrator ───────────────────────────────────────────
@@ -204,7 +218,7 @@ export class Orchestrator {
   async analyzeComplexity(title: string, description: string): Promise<ComplexityReport> {
     // ── Model selection: pro for substantial tasks, flash for trivial ones ──
     const descLen = (description || "").length;
-    const usePro = descLen > 300; // real projects need pro-level analysis
+    const usePro = descLen > 500; // only substantial tasks need pro-level analysis
     const model = usePro ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
 
     const prompt = `你是软件项目复杂度评估专家。分析以下任务，返回纯 JSON。
@@ -218,7 +232,7 @@ export class Orchestrator {
 
 ## 规则
 - suggestedAgentCount: 实际需要的 agent 数，不是越多越好。单文件=1，全栈=3-4
-- estimatedPhases: 用 1-4 个中文词描述阶段，如 "数据模型、API开发、前端界面、集成测试"
+- estimatedPhases: 用 1-4 个中文词描述阶段，如 "数据模型、API开发、前端界面、集成测试"。**这些阶段将直接作为子任务结构，请确保每个阶段是独立可交付的**
 - **禁止虚高评分**：纯前端项目不要加后端阶段，简单功能不要加测试阶段
 
 返回 JSON（无 markdown）:
@@ -287,8 +301,8 @@ ${description}`;
 复杂度: ${complexity.score}/10 | 阶段: ${complexity.estimatedPhases.join(", ")}
 需求: ${title} — ${description}`;
 
-    // Use pro for complex decomposition — flash is too weak for multi-phase planning
-    const decompModel = complexity.score >= 6 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
+    // Use pro for very complex decomposition (score >= 8) — flash handles moderate tasks fine
+    const decompModel = complexity.score >= 8 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
     try {
       const output = await askClaude(prompt, decompModel);
       try {
@@ -318,26 +332,41 @@ ${description}`;
     }
   }
 
-  /** Fallback: use complexity phases as task structure when AI decomposition fails */
+  /** Phase-based decomposition: each complexity phase becomes one subtask.
+   *  This is the PRIMARY decomposition path (no separate AI call needed). */
   private _phaseBasedFallback(title: string, description: string, complexity: ComplexityReport): DecompositionResult {
     const phases = complexity.estimatedPhases.length > 0
       ? complexity.estimatedPhases
-      : ["implementation"];
+      : ["实现"];
 
-    console.log(`[decomposeTask] Phase fallback: ${phases.length} phases -> ${phases.join(", ")}`);
+    console.log(`[decompose] Phase-based: ${phases.length} phases → ${phases.join(", ")}`);
 
     const subTasks = phases.map((phaseName, i) => ({
       title: `[${phaseName}] ${title}`,
-      description: `Phase: ${phaseName}\n\n${description}\n\nPhase "${phaseName}" task.`,
+      description: [
+        `## 阶段: ${phaseName}`,
+        ``,
+        `**父需求:** ${title}`,
+        `**复杂度:** ${complexity.score}/10`,
+        ``,
+        description,
+        ``,
+        `本阶段专注于"${phaseName}"，产出必须独立可验证。`,
+      ].join("\n"),
       requiredCapabilities: inferCapabilities(title, `${description} ${phaseName}`),
       dependsOn: i > 0 ? [i - 1] : [],
-      acceptanceCriteria: `Phase ${phaseName} completed and verified`,
+      acceptanceCriteria: [
+        `阶段 "${phaseName}" 完成，需满足:`,
+        `1. 代码编译通过，无类型错误`,
+        `2. 核心逻辑通过测试验证`,
+        `3. 产出物符合 "${phaseName}" 阶段定义`,
+      ].join("\n"),
     }));
 
     return {
       subTasks,
-      estimatedTotalMinutes: phases.length * 10,
-      recommendedModel: complexity.score >= 7 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash",
+      estimatedTotalMinutes: Math.max(phases.length * 15, 15),
+      recommendedModel: complexity.score >= 8 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash",
     };
   }
 
@@ -421,6 +450,17 @@ ${description}`;
       return null;
     }
 
+    // ── Cost saving: skip evaluation for low-complexity tasks ──
+    // Simple tasks (short description, few capabilities) don't need a full
+    // code-review spawn. The quality gate acceptance check is sufficient.
+    const descLen = (generatorTask.description || "").length;
+    const capCount = (generatorTask.required_capabilities || []).length;
+    const estComplexity = (descLen > 500 ? 3 : descLen > 200 ? 2 : 1) + Math.min(capCount, 3);
+    if (estComplexity < 4) {
+      console.log(`[Pipeline] Skipping evaluation for low-complexity task "${generatorTask.title}" (est. complexity=${estComplexity}, descLen=${descLen}, caps=${capCount})`);
+      return null;
+    }
+
     // For Generator tasks: always create evaluations. The keyword estimator
     // is too coarse to reliably gate code quality review.
 
@@ -464,7 +504,52 @@ ${description}`;
     }
 
     console.log(`[Pipeline] Review: ${reviewTask.id.slice(0,8)} → code-reviewer (${reviewerAgent.name})`);
-    return { reviewTaskId: reviewTask.id, qaTaskId: reviewTask.id };
+
+    // ── Create reality-check task (final gate, depends on code-review) ──
+    const realityAgent = this._findAgentByRole(allAgents, "reality-checker")
+      ?? this._findAgentByRole(allAgents, "testing-qa"); // fallback if reality-checker not seeded yet
+
+    let realityTaskId: string | null = null;
+    if (realityAgent) {
+      const realityTask = this.taskGraph.createTask({
+        project_id: generatorTask.project_id,
+        title: `✅ 最终验收: ${generatorTask.title}`,
+        description: [
+          `## 最终验收任务`,
+          ``,
+          `**验收对象:** ${generatorTask.title}`,
+          `**审查上下文:** 上游 Generator 的实现 + code-reviewer 的审查结论`,
+          ``,
+          `你是最后一道防线。默认判决 NEEDS WORK，必须有压倒性证据才判 READY。`,
+          ``,
+          `---`,
+          `### 审查上下文`,
+          evalContext,
+        ].join("\n"),
+        priority: 2,
+        required_capabilities: ["testing"],
+        acceptance_criteria: [
+          `对照原始需求 + CONTRACT.md 逐条验证:`,
+          `1. 契约字段与代码字段 diff 为空`,
+          `2. 验收标准全部满足`,
+          `3. 编译 0 error`,
+          `4. 无安全高危未解决`,
+        ].join("\n"),
+        max_retries: 1,
+        parent_task_id: generatorTask.id,
+      });
+
+      // Reality-check depends on code-review passing first
+      this.taskGraph.addDependencies(realityTask.id, [reviewTask.id]);
+
+      this.taskGraph.assignTask(realityTask.id, realityAgent.id, realityTask.version);
+      realityTaskId = realityTask.id;
+      console.log(`[Pipeline] Reality: ${realityTask.id.slice(0,8)} → ${realityAgent.role} (${realityAgent.name})`);
+    } else {
+      console.warn(`[Pipeline] No reality-checker or testing-qa available for "${generatorTask.title}"`);
+    }
+
+    return { reviewTaskId: reviewTask.id, qaTaskId: realityTaskId ?? reviewTask.id };
   }
 
   /**
@@ -542,22 +627,79 @@ ${description}`;
     return agents.find(a => a.role === role) ?? null;
   }
 
-  /** Create a Sprint Contract task for high-complexity projects.
-   *  Assigns to orchestrator / product-manager / software-architect (all have architecture cap).
-   *  The Planner produces requirements/architecture docs that downstream tasks consume. */
-  private _createPlannerTask(
+  /** Create a contract task — the single source of truth for all downstream agents.
+   *  Writes docs/CONTRACT.md to the target project. All generators + evaluators
+   *  must read this file before starting. Threshold lowered to score >= 5. */
+  private _createContractTask(
     projectId: string, title: string, description: string, complexity: ComplexityReport
   ): string | null {
     const task = this.taskGraph.createTask({
       project_id: projectId,
-      title: `Sprint Contract: ${title}`,
-      description: `作为 Planner，分析以下需求并输出 Sprint Contract:\n\n${description}\n\n复杂度: ${complexity.score}/10\n阶段: ${complexity.estimatedPhases.join(", ")}\n\n输出格式:\n## 需求分析\n## 架构方案\n## 接口契约\n## 任务拆解确认`,
-      priority: 0,
+      title: `📋 Contract: ${title}`,
+      description: [
+        `你是软件架构师。你必须生成**项目接口契约文件**，这是下游所有 agent 的唯一真相来源。`,
+        ``,
+        `## 原始需求`,
+        description,
+        ``,
+        `## 复杂度分析`,
+        `评分: ${complexity.score}/10`,
+        `阶段: ${complexity.estimatedPhases.join(" → ")}`,
+        ``,
+        `## 你必须输出文件: docs/CONTRACT.md`,
+        ``,
+        `### 文件格式（严格遵循）`,
+        ``,
+        `\`\`\`markdown`,
+        `# 接口契约 — ${title}`,
+        `> 版本: 1.0 | 所有实现者必须遵守 | 字段名一个字符不能差`,
+        ``,
+        `## 1. API 接口定义`,
+        `### POST /api/xxx`,
+        `- **描述**: [接口用途]`,
+        `- **鉴权**: [无 / JWT / ...]`,
+        `- **Request body**:`,
+        `  - field_name: string (必填) — [说明]`,
+        `- **Response 200**:`,
+        `  { "field": "type" }`,
+        `- **Response 400/401/404/500**:`,
+        `  { "error": "error_code", "message": "人类可读信息" }`,
+        ``,
+        `### GET /api/xxx/:id`,
+        `...`,
+        ``,
+        `## 2. 数据模型`,
+        `### xxx 表`,
+        `| 字段 | 类型 | 约束 | 说明 |`,
+        `|------|------|------|------|`,
+        `| id | INT | PK AUTO_INCREMENT | 主键 |`,
+        ``,
+        `## 3. 涉及文件清单`,
+        `- backend/src/routes/xxx.ts — [说明]`,
+        `- frontend/src/pages/Xxx.tsx — [说明]`,
+        ``,
+        `## 4. 关键业务规则`,
+        `- [规则1]`,
+        `- [规则2]`,
+        `\`\`\``,
+        ``,
+        `## 铁律`,
+        `- 接口路径/方法/字段名定义后不可擅自修改——下游 agent 全部依赖此文件`,
+        `- 任何字段有歧义时标注 [待确认] 而不是猜测`,
+        `- 文件必须写入到 docs/CONTRACT.md`,
+      ].join("\n"),
+      priority: 0, // highest — runs before all implementation tasks
       required_capabilities: ["architecture"],
-      acceptance_criteria: "Sprint Contract 通过编排官审查，下游任务可据此执行",
+      acceptance_criteria: [
+        `docs/CONTRACT.md 文件存在且包含以下全部内容:`,
+        `1. 所有 API 接口定义（路径/方法/Request/Response/错误码 — 无模糊表述）`,
+        `2. 所有数据模型定义（字段/类型/约束 — 表格格式）`,
+        `3. 涉及文件清单`,
+        `4. 关键业务规则`,
+      ].join("\n"),
       max_retries: 2,
     });
-    console.log(`[Planner] Created Sprint Contract task ${task.id.slice(0, 8)} for "${title}"`);
+    console.log(`[Contract] Created contract task ${task.id.slice(0, 8)} for "${title}" (score=${complexity.score})`);
     return task.id;
   }
 
@@ -624,18 +766,20 @@ ${description}`;
     decomposition: DecompositionResult;
     taskIds: string[];
   }> {
-    // Step 1: AI analyze complexity
+    // Step 1: AI analyze complexity (produces phases used as task structure)
     const complexity = await this.analyzeComplexity(title, description);
 
-    // Step 2: AI decompose into sub-tasks
-    const decomposition = await this.decomposeTask(title, description, complexity);
+    // Step 2: Phase-based decomposition — no separate AI call needed.
+    // analyzeComplexity already produced quality phases; each phase = one subtask.
+    const decomposition = this._phaseBasedFallback(title, description, complexity);
 
-    // Step 3: Create planner task (Sprint Contract) for high-complexity tasks
-    let plannerTaskId: string | null = null;
-    if (complexity.score >= 7) {
-      plannerTaskId = this._createPlannerTask(projectId, title, description, complexity);
-      if (plannerTaskId) {
-        console.log(`[orchestrate] Created Planner task for "${title}" (score=${complexity.score})`);
+    // Step 3: Create contract task for moderate+ complexity (score >= 5).
+    // This writes docs/CONTRACT.md — the single source of truth for all downstream agents.
+    let contractTaskId: string | null = null;
+    if (complexity.score >= 5) {
+      contractTaskId = this._createContractTask(projectId, title, description, complexity);
+      if (contractTaskId) {
+        console.log(`[orchestrate] Created Contract task for "${title}" (score=${complexity.score})`);
       }
     }
 
@@ -659,9 +803,9 @@ ${description}`;
     }
 
     // If planner task exists, all implementation tasks depend on it
-    if (plannerTaskId) {
+    if (contractTaskId) {
       for (const tid of taskIds) {
-        this.taskGraph.addDependencies(tid, [plannerTaskId]);
+        this.taskGraph.addDependencies(tid, [contractTaskId]);
       }
     }
 
@@ -679,16 +823,29 @@ ${description}`;
       }
     }
 
-    const allTaskIds = plannerTaskId ? [plannerTaskId, ...taskIds] : taskIds;
+    const allTaskIds = contractTaskId ? [contractTaskId, ...taskIds] : taskIds;
     return { complexity, decomposition, taskIds: allTaskIds };
   }
 
-  /** Like orchestrate() but reuses a pre-computed complexity to skip re-analysis */
+  /** Like orchestrate() but reuses a pre-computed complexity to skip re-analysis.
+   *  Uses phase-based decomposition instead of a separate AI call — saves ~10k tokens per swarm. */
   private async _orchestrateWithComplexity(
     projectId: string, title: string, description: string, complexity: ComplexityReport
   ): Promise<{ complexity: ComplexityReport; decomposition: DecompositionResult; taskIds: string[] }> {
-    const decomposition = await this.decomposeTask(title, description, complexity);
+    // Phase-based decomposition: each phase becomes one subtask.
+    // No separate AI call needed — analyzeComplexity already produced quality phases.
+    const decomposition = this._phaseBasedFallback(title, description, complexity);
+
+    // Create contract task for moderate+ complexity (score >= 5).
+    // All implementation tasks depend on it — contract must exist before code.
+    let contractTaskId: string | null = null;
+    if (complexity.score >= 5) {
+      contractTaskId = this._createContractTask(projectId, title, description, complexity);
+    }
+
     const taskIds: string[] = [];
+    if (contractTaskId) taskIds.push(contractTaskId);
+
     const idMap = new Map<number, string>();
     for (let i = 0; i < decomposition.subTasks.length; i++) {
       const st = decomposition.subTasks[i]!;
@@ -701,6 +858,16 @@ ${description}`;
       taskIds.push(task.id);
       idMap.set(i, task.id);
     }
+
+    // All implementation tasks depend on contract (if exists)
+    if (contractTaskId) {
+      for (const tid of taskIds) {
+        if (tid !== contractTaskId) {
+          this.taskGraph.addDependencies(tid, [contractTaskId]);
+        }
+      }
+    }
+
     for (let i = 0; i < decomposition.subTasks.length; i++) {
       const st = decomposition.subTasks[i]!;
       if (st.dependsOn.length > 0) {
@@ -910,9 +1077,6 @@ ${description}`;
 
           // ── 3-Stage Pipeline: Generator → Evaluator(s) → Done ──
           if (isGeneratorRole(role)) {
-            // Generator finished writing code → create evaluation tasks
-            // Override ReadyForTest (set by executeTask) back to InDev — generator
-            // stays InDev until both code-review and testing-qa pass.
             const fresh = this.taskGraph.getTask(taskId);
             if (fresh && fresh.status !== "InDev" && fresh.status !== "Done") {
               this.taskGraph.updateTask(taskId, {
@@ -921,24 +1085,12 @@ ${description}`;
               });
             }
 
-            const evalResult = await this.createEvaluationTasks(
-              task, role, result.value.output, allAgents
-            );
+            // ── Self-verification check: if agent already ran tsc/diff/grep and
+            // reported evidence, skip the expensive evaluator spawn. ──
+            const selfVerified = hasSelfVerification(result.value.output);
 
-            if (evalResult) {
-              // Add evaluation tasks to the execution loop
-              remaining.add(evalResult.reviewTaskId);
-              remaining.add(evalResult.qaTaskId);
-              // Refresh agentMap with evaluator agents (they may have been picked up)
-              const reviewAgent = this._findAgentByRole(allAgents, "code-reviewer");
-              const qaAgent = this._findAgentByRole(allAgents, "testing-qa");
-              if (reviewAgent) agentMap.set(reviewAgent.id, reviewAgent);
-              if (qaAgent) agentMap.set(qaAgent.id, qaAgent);
-              // Generator stays in remaining — polled every cycle until evaluations pass
-              console.log(`[Pipeline] Generator "${task.title}" awaiting evaluation (2 evaluators dispatched)`);
-            } else {
-              // No evaluators available or complexity too low → fallback to quality gate
-              console.log(`[Pipeline] Evaluation skipped for "${task.title}" — falling back to quality gate`);
+            if (selfVerified) {
+              console.log(`[Pipeline] Generator "${task.title}" self-verified — skipping evaluator, running quality gate`);
               const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
               if (gateReport?.overallPassed) {
                 const f = this.taskGraph.getTask(taskId);
@@ -946,10 +1098,42 @@ ${description}`;
                 remaining.delete(taskId);
                 completed++;
                 await this.propagateContext(taskId);
+                console.log(`[Pipeline] "${task.title}" → Done (self-verified + gate passed)`);
+              } else if (gateReport) {
+                console.log(`[QualityGate] "${task.title}" FAILED — keeping in loop for InFix retry`);
               } else {
-                // Quality gate failed — keep task in remaining so InFix recovery can retry it
-                console.log(`[QualityGate] FAILED for "${task.title}" — keeping in loop for InFix retry`);
-                // Don't delete from remaining — InFix recovery at top of while-loop will handle it
+                remaining.delete(taskId);
+                completed++;
+                await this.propagateContext(taskId);
+              }
+            } else {
+              // No self-verification → create external evaluator tasks
+              console.log(`[Pipeline] Generator "${task.title}" lacks self-verification — creating external evaluators`);
+              const evalResult = await this.createEvaluationTasks(
+                task, role, result.value.output, allAgents
+              );
+
+              if (evalResult) {
+                remaining.add(evalResult.reviewTaskId);
+                remaining.add(evalResult.qaTaskId);
+                const reviewAgent = this._findAgentByRole(allAgents, "code-reviewer");
+                const qaAgent = this._findAgentByRole(allAgents, "reality-checker")
+                  ?? this._findAgentByRole(allAgents, "testing-qa");
+                if (reviewAgent) agentMap.set(reviewAgent.id, reviewAgent);
+                if (qaAgent) agentMap.set(qaAgent.id, qaAgent);
+                console.log(`[Pipeline] Generator "${task.title}" awaiting evaluation (2 evaluators dispatched)`);
+              } else {
+                console.log(`[Pipeline] Evaluation skipped for "${task.title}" — falling back to quality gate`);
+                const gateReport = await qualityGate.runGates(task, result.value.output).catch(() => null);
+                if (gateReport?.overallPassed) {
+                  const f = this.taskGraph.getTask(taskId);
+                  if (f) this.taskGraph.updateTask(taskId, { status: "Done", version: f.version });
+                  remaining.delete(taskId);
+                  completed++;
+                  await this.propagateContext(taskId);
+                } else if (gateReport) {
+                  console.log(`[QualityGate] FAILED for "${task.title}" — keeping in loop for InFix retry`);
+                }
               }
             }
           } else if (isEvaluatorRole(role)) {

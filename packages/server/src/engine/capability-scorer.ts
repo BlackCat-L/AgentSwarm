@@ -142,20 +142,27 @@ export class CapabilityScorer {
 
     // Collect EMA scores for matching tags
     const matchedScores: number[] = [];
+    let declaredMatchBonus = 0;
     for (const tag of requiredTags) {
       if (tag in stats.capabilities) {
         matchedScores.push(stats.capabilities[tag]!);
+        // Each declared capability match adds a small bonus (+0.08 per tag).
+        // This breaks ties when all agents have the same EMA default (0.5),
+        // ensuring frontend tasks prefer frontend agents, etc.
+        // The bonus is small enough that EMA history (0-1 range) dominates after a few runs.
+        declaredMatchBonus += 0.08;
       }
     }
 
     if (matchedScores.length === 0) {
-      // No matching tags at all → fallback to reliability
+      // No matching tags at all → fallback to reliability (no bonus — this agent is a bad fit)
       return this.reliabilityScore(agentId);
     }
 
-    // Average of matched tag EMA scores
+    // Average of matched tag EMA scores + declared capability bonus (capped at 1.0)
     const sum = matchedScores.reduce((a, b) => a + b, 0);
-    return sum / matchedScores.length;
+    const baseScore = sum / matchedScores.length;
+    return Math.min(1.0, baseScore + declaredMatchBonus);
   }
 
   /**

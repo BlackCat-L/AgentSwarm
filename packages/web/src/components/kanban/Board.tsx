@@ -29,8 +29,8 @@ export function Board({ projectId }: Props) {
   });
 
   const { data: agents } = useQuery({
-    queryKey: ["agents", projectId],
-    queryFn: () => fetch(`/api/agents?project_id=${projectId}`).then(r => r.json()) as Promise<any[]>,
+    queryKey: ["agents", "all"], // fetch all agents — cross-project assignments need full map
+    queryFn: () => fetch(`/api/agents`).then(r => r.json()) as Promise<any[]>,
     refetchInterval: 15000,
   });
 

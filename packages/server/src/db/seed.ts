@@ -20,6 +20,7 @@ const DEFAULT_TEAM: Array<{ name: string; role: string; model: "deepseek-v4-pro[
   { name: "前端开发",     role: "frontend-developer",    model: "deepseek-v4-flash" },
   { name: "DevOps自动化", role: "devops-automator",      model: "deepseek-v4-flash" },
   { name: "测试QA",       role: "testing-qa",            model: "deepseek-v4-flash" },
+  { name: "验收官",       role: "reality-checker",       model: "deepseek-v4-flash" },
 ];
 
 // Role → capability tag mapping for skill-based assignment
@@ -36,6 +37,7 @@ const ROLE_CAPABILITY_MAP: Record<string, string[]> = {
   "frontend-developer":  ["frontend"],
   "devops-automator":    ["architecture"],
   "testing-qa":          ["testing"],
+  "reality-checker":     ["testing"],
 };
 
 export function seed(): void {

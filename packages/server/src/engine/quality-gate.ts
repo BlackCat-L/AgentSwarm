@@ -10,6 +10,7 @@
 
 import type { TaskNode } from "@agent-swarm/shared";
 import { spawnClaudeOnce } from "./claude-spawn.js";
+import { getDb } from "../db/connection.js";
 
 export interface GateResult {
   passed: boolean;
@@ -36,6 +37,77 @@ async function quickAsk(prompt: string, model: string = "deepseek-v4-flash"): Pr
   return result.success ? result.output : "";
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ── Disk change detection: ground truth for file modifications ──
+// ═══════════════════════════════════════════════════════════════
+
+/** Source file extensions that agents should modify */
+const SOURCE_EXTS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".css", ".scss", ".less",
+  ".html", ".htm", ".vue", ".svelte",
+  ".json", ".yaml", ".yml", ".toml",
+  ".py", ".rs", ".go", ".java", ".cs",
+  ".md", ".mdx",
+]);
+
+/**
+ * Walk project directory (max 3 levels, skip node_modules/.git/dist etc.)
+ * Returns true if any source file was modified more recently than sinceMs ago.
+ */
+async function hasRecentDiskChanges(projectCwd: string, sinceMs: number = 10 * 60 * 1000): Promise<boolean> {
+  try {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const cutoff = Date.now() - sinceMs;
+    const skipDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__",
+      "Library", "Temp", "Obj", "bin", "obj", ".trash", ".bak"]);
+
+    async function walk(dir: string, depth: number): Promise<boolean> {
+      if (depth > 3) return false;
+      let entries;
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); }
+      catch { return false; }
+      for (const entry of entries) {
+        if (skipDirs.has(entry.name)) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (await walk(full, depth + 1)) return true;
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (SOURCE_EXTS.has(ext)) {
+            try {
+              const stat = await fs.stat(full);
+              if (stat.mtimeMs > cutoff) return true;
+            } catch {}
+          }
+        }
+      }
+      return false;
+    }
+    return await walk(projectCwd, 0);
+  } catch {
+    return false; // fallback to text heuristics on error
+  }
+}
+
+/** Resolve project working directory from task's project_id */
+function resolveProjectCwd(projectId?: string): string | null {
+  if (!projectId) return null;
+  try {
+    const db = getDb();
+    const stmt = db.prepare("SELECT path FROM projects WHERE id = ?");
+    stmt.bind([projectId]);
+    if (stmt.step()) {
+      const row = stmt.getAsObject() as { path: string };
+      stmt.free();
+      return row.path || null;
+    }
+    stmt.free();
+  } catch {}
+  return null;
+}
+
 export class QualityGateService {
 
   /**
@@ -51,12 +123,95 @@ export class QualityGateService {
 
     // ── COST SAVING: Skip gate spawns for evaluator tasks and trivial tasks ──
     if (isTrivial && hasRetried) {
-      // Trivial retried task — auto-pass all gates
       return { taskId: task.id, gates: [{ passed: true, gate: "acceptance", findings: [], suggestion: "简单已重试任务，自动通过" }], overallPassed: true, summary: "skip: trivial retried" };
     }
     if (isEvaluatorTask) {
-      // Evaluator tasks are themselves quality checks — skip redundant gate spawn
       return { taskId: task.id, gates: [{ passed: true, gate: "acceptance", findings: [], suggestion: "评估任务，跳过质量门禁" }], overallPassed: true, summary: "skip: evaluator task" };
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ── GATE 0: File change hard check (before all AI gates) ──
+    // ═══════════════════════════════════════════════════════════════
+    //
+    // Two-tier detection for the "分析→FAIL→重试→分析→FAIL" dead loop:
+    //
+    //   TIER A: Short output (< 2000 chars) + no tool evidence → immediate FAIL
+    //           Catches: empty/sparse output, brief analysis without code
+    //
+    //   TIER B: Any length + no tool evidence → check DISK for real changes
+    //           Catches: long analysis text that describes but doesn't apply changes
+    //           (e.g., 2995 chars of code descriptions with 0 actual file modifications)
+    //
+    // Raison d'être: Text heuristics alone are unreliable — an agent can produce
+    // thousands of chars describing code changes without actually modifying files.
+    // Disk evidence (file mtimes) is the only ground truth.
+    const isGeneratorTask = !isEvaluatorTask && !task.title.startsWith("📋 Contract:");
+    const hasToolEvidence = /Edit|Write|Bash|改动文件|修改.*文件|git diff|创建.*文件|tsc --noEmit|npm run|编译通过|验证通过|cat\s|mkdir|touch|cp\s|mv\s/.test(output);
+    const outputTooShort = output.length < 2000; // raised from 500 — analysis-only often 1000-3000 chars
+
+    if (isGeneratorTask && !hasToolEvidence) {
+      // ── TIER A: Short output with no tool evidence → instant fail ──
+      if (outputTooShort) {
+        if (hasRetried) {
+          return {
+            taskId: task.id,
+            gates: [{
+              passed: false,
+              gate: "acceptance",
+              findings: [`重试${task.retry_count}次仍无文件变更——Agent未调用Edit/Write/Bash工具，0文件修改。`],
+              suggestion: "Agent反复输出分析文字但不修改代码，已达重试上限。需人工检查任务描述是否明确要求了文件操作。",
+            }],
+            overallPassed: false,
+            summary: `❌ ${task.title}: 0 file changes after ${task.retry_count} retries — PERMANENTLY BLOCKED`,
+          };
+        }
+        return {
+          taskId: task.id,
+          gates: [{
+            passed: false,
+            gate: "acceptance",
+            findings: ["Agent未调用Edit/Write/Bash工具，0文件变更。输出<2000字且无工具调用证据。"],
+            suggestion: "必须用Edit/Write/Bash在目标项目中实际创建或修改代码文件。不能只输出文字分析替代。",
+          }],
+          overallPassed: false,
+          summary: `❌ ${task.title}: 0 file changes — output < 2000 chars, no tool evidence`,
+        };
+      }
+
+      // ── TIER B: Long output but no tool evidence → verify disk ──
+      const projectCwd = resolveProjectCwd(task.project_id);
+      if (projectCwd) {
+        const diskChanged = await hasRecentDiskChanges(projectCwd);
+        if (!diskChanged) {
+          // Output is long enough to pass Tier A, but zero files actually modified on disk
+          if (hasRetried) {
+            return {
+              taskId: task.id,
+              gates: [{
+                passed: false,
+                gate: "acceptance",
+                findings: [`重试${task.retry_count}次——磁盘检测：项目目录中0个文件被修改。Agent输出了${output.length}字分析但未实际修改任何代码。`],
+                suggestion: "Agent反复分析但不修改文件，已达重试上限。BLOCKED。",
+              }],
+              overallPassed: false,
+              summary: `❌ ${task.title}: 0 disk changes after ${task.retry_count} retries — PERMANENTLY BLOCKED`,
+            };
+          }
+          return {
+            taskId: task.id,
+            gates: [{
+              passed: false,
+              gate: "acceptance",
+              findings: [`磁盘检测失败：项目目录中0个源文件被修改。Agent输出了${output.length}字内容但未实际写入任何代码文件。`],
+              suggestion: "必须用Edit/Write/Bash实际修改代码文件。磁盘上的文件变更才是交付物，文字分析不是。",
+            }],
+            overallPassed: false,
+            summary: `❌ ${task.title}: ${output.length} chars output but 0 files changed on disk — analysis without code`,
+          };
+        }
+        // Disk has recent changes — agent DID modify files even if tool evidence regex missed it
+        console.log(`[QualityGate] GATE 0 PASS (disk): ${task.title.slice(0,40)} — files modified on disk despite no regex tool evidence`);
+      }
     }
 
     // ── GATE 1: Acceptance (always runs, auto-pass after 1 retry) ──

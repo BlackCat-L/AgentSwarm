@@ -128,10 +128,10 @@ export default function App() {
         <section>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">看板</h2>
-            {(projects?.length ?? 0) > 1 && (
+            {(projects?.length ?? 0) > 0 && (
               <select value={activeProjectId} onChange={e => setSelectedProjectId(e.target.value)}
                 className="text-xs border border-gray-200 dark:border-slate-600 rounded px-2 py-1 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                <option value="">全部项目</option>
+                {(projects?.length ?? 0) > 1 && <option value="">全部项目</option>}
                 {projects?.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             )}
