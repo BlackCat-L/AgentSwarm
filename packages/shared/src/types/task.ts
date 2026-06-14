@@ -90,8 +90,8 @@ export interface KanbanBoard {
 /** 合法状态流转矩阵——禁止非法拖拽 */
 export const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   Backlog: ["InDev"],
-  InDev: ["ReadyForTest", "InFix", "Blocked"],
-  ReadyForTest: ["InFix", "ReadyForDeploy"],
+  InDev: ["ReadyForTest", "InFix", "Blocked", "Done"],  // 3-stage pipeline: InDev→Done when all evaluations pass
+  ReadyForTest: ["InFix", "ReadyForDeploy", "InDev"],    // InDev: generator reset awaiting evaluators
   InFix: ["ReadyForTest", "InDev"],
   ReadyForDeploy: ["Done", "Blocked"],
   Done: [],
@@ -119,6 +119,8 @@ export interface CreateTaskInput {
   timeout_ms?: number;
   /** 所属阶段名称（来自 analyzeComplexity 的 estimatedPhases） */
   phase?: string;
+  /** 父任务ID（3-stage pipeline：评估子任务指向生成器父任务） */
+  parent_task_id?: string;
 }
 
 /** 更新任务输入 */
@@ -130,4 +132,5 @@ export interface UpdateTaskInput {
   owner_agent_id?: string | null;
   version: number; // 乐观锁必需
   error_message?: string | null;
+  retry_count?: number;
 }

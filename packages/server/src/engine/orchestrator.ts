@@ -138,7 +138,9 @@ function inferCapabilities(title: string, description: string): string[] {
       caps.push(cap);
     }
   }
-  return caps.length > 0 ? caps : ["architecture"]; // default to architecture
+  // Cap at 2 most-relevant tags to avoid all-agents-tie problem.
+  // When AI decomposition fails, we only know coarse categories.
+  return caps.length > 0 ? caps.slice(0, 2) : ["architecture"];
 }
 
 // ── 3-Stage Pipeline: Role Classification ──────────────────
@@ -156,12 +158,8 @@ const EVALUATOR_ROLES = new Set([
   "code-reviewer", "testing-qa", "security-engineer",
 ]);
 
-/** Minimum complexity score to trigger the 3-stage pipeline */
-const PIPELINE_COMPLEXITY_THRESHOLD = 3;
-
 /** Evaluator task title prefixes for identification */
 const EVAL_TITLE_PREFIX = "审查:";
-const QA_TITLE_PREFIX = "验证:";
 
 function isGeneratorRole(role: string): boolean {
   return GENERATOR_ROLES.has(role);
@@ -174,7 +172,7 @@ function isEvaluatorRole(role: string): boolean {
 // ── Orchestrator ───────────────────────────────────────────
 
 /** Maximum number of Claude Code processes spawned concurrently */
-const MAX_CONCURRENT_SPAWNS = 3;
+const MAX_CONCURRENT_SPAWNS = 2;
 
 export class Orchestrator {
   private taskGraph: TaskGraph;
@@ -248,7 +246,7 @@ export class Orchestrator {
 返回纯 JSON（不要 markdown 代码块）。
 **输出语言：简体中文。** 标题、描述、验收标准全部用中文写。
 
-能力标签必须从以下 5 个标签中选择（可多选，不要自己编造）:
+能力标签必须从以下 5 个标签中选择。**每个子任务最多选 2 个最相关的标签，精准匹配，不要全部打上：**
 - frontend      (前端/UI/组件/样式/交互)
 - architecture  (架构设计/后端逻辑/API/数据库/DevOps/模块划分)
 - testing       (测试/验证/QA/代码审查)
@@ -400,42 +398,32 @@ export class Orchestrator {
     executionOutput: string,
     allAgents: AgentInstance[],
   ): Promise<{ reviewTaskId: string; qaTaskId: string } | null> {
-    // Gate: skip pipeline for Planner/Evaluator roles or simple tasks
+    // Gate: skip pipeline for Planner/Evaluator roles
     if (!isGeneratorRole(agentRole)) {
       console.log(`[Pipeline] Skipping evaluation for ${agentRole} task "${generatorTask.title}" — not a Generator role`);
       return null;
     }
 
-    // Gate: estimate complexity from description + execution output
-    const complexityEstimate = this.estimateComplexity(
-      (generatorTask.description || "") + "\n" + executionOutput,
-      generatorTask.title
-    );
-    if (complexityEstimate < PIPELINE_COMPLEXITY_THRESHOLD) {
-      console.log(`[Pipeline] Skipping evaluation for "${generatorTask.title}" — complexity ${complexityEstimate} < ${PIPELINE_COMPLEXITY_THRESHOLD}`);
-      return null;
-    }
+    // For Generator tasks: always create evaluations. The keyword estimator
+    // is too coarse to reliably gate code quality review.
 
     // Find code-reviewer agent (prefer idle)
     const reviewerAgent = this._findAgentByRole(allAgents, "code-reviewer");
-    // Find testing-qa agent (prefer idle)
-    const qaAgent = this._findAgentByRole(allAgents, "testing-qa");
-
-    if (!reviewerAgent || !qaAgent) {
-      console.warn(`[Pipeline] Cannot create evaluation tasks for "${generatorTask.title}" — missing evaluator agents (reviewer=${!!reviewerAgent}, qa=${!!qaAgent}). Will retry on next cycle.`);
+    if (!reviewerAgent) {
+      console.warn(`[Pipeline] Cannot create evaluation for "${generatorTask.title}" — no code-reviewer available`);
       return null;
     }
 
-    // Build evaluation context: parent task title + execution output
+    // Build evaluation context
     const evalContext = this._buildEvalContext(generatorTask, executionOutput);
 
-    // ── Create code-review task ──────────────────────────────
+    // ── Create 1 review task (code-review only; QA + security deferred to reduce explosion) ──
     const reviewTask = this.taskGraph.createTask({
       project_id: generatorTask.project_id,
       title: `${EVAL_TITLE_PREFIX} ${generatorTask.title}`,
-      description: `## 评估任务: 代码审查\n\n`
+      description: `## 评估任务: 代码审查与端到端验证\n\n`
         + `**审查对象:** ${generatorTask.title}\n\n`
-        + `**审查标准:** 按四维评分矩阵独立验收 Generator 的产出。`
+        + `**审查标准:** 按四维评分矩阵独立验收 + 验收标准逐条验证。`
         + `每个发现必须附文件:行号 + 问题 + 修复建议。\n\n`
         + `---\n### 审查上下文 (Generator 的产出)\n${evalContext}`,
       priority: 1,
@@ -446,75 +434,13 @@ export class Orchestrator {
       parent_task_id: generatorTask.id,
     });
 
-    // Assign code-reviewer agent to the review task
     const assignedReview = this.taskGraph.assignTask(reviewTask.id, reviewerAgent.id, reviewTask.version);
     if (!assignedReview) {
-      console.warn(`[Pipeline] Failed to assign code-reviewer to review task for "${generatorTask.title}"`);
+      console.warn(`[Pipeline] Failed to assign code-reviewer to "${generatorTask.title}"`);
     }
 
-    // ── Create testing-qa task (depends on code-review) ──────
-    const qaTask = this.taskGraph.createTask({
-      project_id: generatorTask.project_id,
-      title: `${QA_TITLE_PREFIX} ${generatorTask.title}`,
-      description: `## 评估任务: 端到端验证\n\n`
-        + `**验证对象:** ${generatorTask.title}\n\n`
-        + `**验证方法:** 按验收标准逐条验证功能正确性。`
-        + `覆盖四类路径：正常 + 边界 + 异常 + 并发。`
-        + `反橡皮图章三问：①代码真跑过？②找到至少一个问题？③有没有放水？\n\n`
-        + `---\n### 验证上下文 (Generator 的产出 + 审查结果)\n${evalContext}`,
-      priority: 2,
-      required_capabilities: ["testing"],
-      acceptance_criteria: `每条验收标准至少有对应的测试用例和 PASS/FAIL 结论。`
-        + `发现至少一个可验证的结果或确认通过（附证据）。`,
-      max_retries: 2,
-      parent_task_id: generatorTask.id,
-    });
-
-    // Assign testing-qa agent to the QA task
-    const assignedQa = this.taskGraph.assignTask(qaTask.id, qaAgent.id, qaTask.version);
-    if (!assignedQa) {
-      console.warn(`[Pipeline] Failed to assign testing-qa to QA task for "${generatorTask.title}"`);
-    }
-
-    // ── Set dependency: QA task depends on review task ──
-    this.taskGraph.addDependencies(qaTask.id, [reviewTask.id]);
-
-    // ── Create security review task (only for security-sensitive tasks) ──
-    const caps = (generatorTask.required_capabilities as string[]) ?? [];
-    const needsSecurityReview = caps.includes("security")
-      || /auth|login|password|token|权限|认证|安全|加密|密钥|注入|XSS|CSRF/i.test(generatorTask.title + (generatorTask.description || ""));
-    if (needsSecurityReview) {
-      const securityAgent = this._findAgentByRole(allAgents, "security-engineer");
-      if (securityAgent) {
-        const securityTask = this.taskGraph.createTask({
-          project_id: generatorTask.project_id,
-          title: `Security Review: ${generatorTask.title}`,
-          description: `## 评估任务: 安全审查\n\n`
-            + `**审查对象:** ${generatorTask.title}\n\n`
-            + `**审查标准:** 威胁面扫描——输入点、权限点、数据暴露点、依赖漏洞。`
-            + `五类检查：注入攻击、越权访问、敏感数据泄露、依赖漏洞、配置暴露。`
-            + `每个发现附：风险等级 + 攻击场景 + 修复方案。\n\n`
-            + `---\n### 审查上下文\n${evalContext}`,
-          priority: 1,
-          required_capabilities: ["security"],
-          acceptance_criteria: `安全审查通过：无高危漏洞，中危漏洞已记录修复方案。`
-            + `敏感数据不落盘、不硬编码、不打印日志。`,
-          max_retries: 2,
-          parent_task_id: generatorTask.id,
-        });
-        const assignedSec = this.taskGraph.assignTask(securityTask.id, securityAgent.id, securityTask.version);
-        if (assignedSec) {
-          this.taskGraph.addDependencies(securityTask.id, [reviewTask.id]);
-          console.log(`  - Security: ${securityTask.id.slice(0, 8)} → security-engineer (${securityAgent.name})`);
-        }
-      }
-    }
-
-    console.log(`[Pipeline] Created evaluation tasks for "${generatorTask.title}":`);
-    console.log(`  - Review:  ${reviewTask.id.slice(0, 8)} → code-reviewer (${reviewerAgent.name})`);
-    console.log(`  - QA:      ${qaTask.id.slice(0, 8)} → testing-qa (${qaAgent.name}) [depends on review]`);
-
-    return { reviewTaskId: reviewTask.id, qaTaskId: qaTask.id };
+    console.log(`[Pipeline] Review: ${reviewTask.id.slice(0,8)} → code-reviewer (${reviewerAgent.name})`);
+    return { reviewTaskId: reviewTask.id, qaTaskId: reviewTask.id };
   }
 
   /**
@@ -632,6 +558,24 @@ export class Orchestrator {
     }
     stmt.free();
     return agent;
+  }
+
+  /** Fast DB lookup for agent role (avoids stale agentMap) */
+  private async _getAgentRole(agentId: string | null): Promise<string> {
+    if (!agentId) return "";
+    try {
+      const { getDb } = await import("../db/connection.js");
+      const db = getDb();
+      const stmt = db.prepare("SELECT role FROM agents WHERE id = ?");
+      stmt.bind([agentId]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject() as { role: string };
+        stmt.free();
+        return row.role;
+      }
+      stmt.free();
+    } catch {}
+    return "";
   }
 
   /** Build evaluation context from the Generator task's output. */
@@ -804,16 +748,66 @@ export class Orchestrator {
     const MAX_IDLE_LOOPS = 30; // 30 * 2s = 60s max wait
 
     while (remaining.size > 0) {
+      // ── InFix recovery: run BEFORE ready filter. Capped at max_retries to prevent infinite loop. ──
+      const orphans = [...remaining].filter(id => {
+        const t = this.taskGraph.getTask(id);
+        return t && t.status === "InFix";
+      });
+      for (const oid of orphans) {
+        const t = this.taskGraph.getTask(oid);
+        if (!t) continue;
+        const retries = (t.retry_count ?? 0) + 1;
+        const maxRetries = t.max_retries ?? 3;
+        if (retries > maxRetries) {
+          // Exhausted retries — permanent failure
+          console.log(`[autoExecute] InFix task "${t.title.slice(0,40)}" exhausted ${maxRetries} retries — marking Blocked`);
+          this.taskGraph.updateTask(oid, { status: "Blocked", version: t.version });
+          remaining.delete(oid);
+          blocked++;
+        } else {
+          console.log(`[autoExecute] Recovering InFix orphan (attempt ${retries}/${maxRetries}): ${t.title.slice(0,40)}`);
+          this.taskGraph.updateTask(oid, { status: "InDev", retry_count: retries, version: t.version });
+        }
+      }
+
       const ready = [...remaining].filter(id => {
         if (executor.isRunning(id)) return false;
         const task = this.taskGraph.getTask(id);
         if (!task) return false;
         if (task.status === "Done") { remaining.delete(id); completed++; return false; }
         if (task.status === "Blocked") { remaining.delete(id); blocked++; return false; }
-        return task.status === "InDev" && this.taskGraph.isTaskReady(id);
+        // InDev: ready to execute. ReadyForTest: completed execution, needs quality gate post-processing.
+        // Both states must be included so ReadyForTest tasks don't become orphans after server restart.
+        return (task.status === "InDev" || task.status === "ReadyForTest") && this.taskGraph.isTaskReady(id);
       });
 
       if (ready.length === 0) {
+        // ── InFix orphan recovery ──
+        // Tasks that fail quality gates go to InFix, but the execution loop
+        // only dispatches InDev tasks. Without explicit recovery, InFix tasks
+        // are orphaned forever. When no InDev tasks are ready, scan for InFix
+        // orphans and auto-retry them.
+        const orphans = [...remaining].filter(id => {
+          const t = this.taskGraph.getTask(id);
+          return t && t.status === "InFix";
+        });
+        if (orphans.length > 0) {
+          console.log(`[autoExecute] Found ${orphans.length} InFix orphan(s) — auto-retrying`);
+          for (const oid of orphans) {
+            const fresh = this.taskGraph.getTask(oid);
+            if (!fresh) continue;
+            // assignTask requires Backlog status — InFix bypasses that path.
+            // Directly set status to InDev with fresh version for re-dispatch.
+            this.taskGraph.updateTask(oid, {
+              status: "InDev",
+              version: fresh.version,
+            });
+          }
+          idleLoops = 0;
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+
         idleLoops++;
         if (idleLoops >= MAX_IDLE_LOOPS) {
           // Deadlock detection: tasks stuck in non-InDev states
@@ -837,30 +831,49 @@ export class Orchestrator {
       }
       idleLoops = 0; // reset on activity
 
+      // ── Process ReadyForTest orphans (completed execution but never post-processed) ──
+      const readyForTest = ready.filter(id => this.taskGraph.getTask(id)?.status === "ReadyForTest");
+      for (const taskId of readyForTest) {
+        const task = this.taskGraph.getTask(taskId);
+        if (!task) continue;
+        console.log(`[autoExecute] Post-processing ReadyForTest orphan: ${task.title.slice(0,40)}`);
+        const gateReport = await qualityGate.runGates(task, task.description || "").catch(() => null);
+        if (gateReport?.overallPassed) {
+          const fresh = this.taskGraph.getTask(taskId);
+          if (fresh) this.taskGraph.updateTask(taskId, { status: "Done", version: fresh.version });
+          remaining.delete(taskId);
+          completed++;
+          await this.propagateContext(taskId);
+          console.log(`[autoExecute] ReadyForTest → Done: ${task.title.slice(0,40)}`);
+        } else {
+          const fresh = this.taskGraph.getTask(taskId);
+          if (fresh) this.taskGraph.updateTask(taskId, { status: "InFix", version: fresh.version });
+          console.log(`[autoExecute] ReadyForTest → InFix: ${task.title.slice(0,40)}`);
+        }
+      }
+
       // Execute ready InDev tasks with concurrency limit.
-      // MAX_CONCURRENT_SPAWNS prevents spawn-storm → API rate-limit → crash (exit -1).
+      const inDevTasks = ready.filter(id => this.taskGraph.getTask(id)?.status === "InDev");
       const results: Array<{ status: string; value?: any; reason?: any }> = [];
-      for (let i = 0; i < ready.length; i += MAX_CONCURRENT_SPAWNS) {
-        const batch = ready.slice(i, i + MAX_CONCURRENT_SPAWNS);
+      for (let i = 0; i < inDevTasks.length; i += MAX_CONCURRENT_SPAWNS) {
+        const batch = inDevTasks.slice(i, i + MAX_CONCURRENT_SPAWNS);
         const batchResults = await Promise.allSettled(
           batch.map(taskId => {
             const task = this.taskGraph.getTask(taskId);
             const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
             const model = agent?.model || "deepseek-v4-pro[1m]";
-            // If agent has a lighter model configured, use it; otherwise default
             return executor.executeTask(taskId, model, agent).catch(e => ({ success: false, output: "", error: e.message }));
           })
         );
         results.push(...batchResults);
-        // Brief inter-batch pause to let API rate-limit bucket refill
-        if (i + MAX_CONCURRENT_SPAWNS < ready.length) {
+        if (i + MAX_CONCURRENT_SPAWNS < inDevTasks.length) {
           await new Promise(r => setTimeout(r, 2000));
         }
       }
 
       // Process results — 3-Stage Pipeline routing
-      for (let i = 0; i < ready.length; i++) {
-        const taskId = ready[i]!;
+      for (let i = 0; i < inDevTasks.length; i++) {
+        const taskId = inDevTasks[i]!;
         const result = results[i];
 
         if (result?.status === "fulfilled" && result.value.success) {
@@ -868,7 +881,8 @@ export class Orchestrator {
           if (!task) continue;
 
           const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
-          const role = agent?.role ?? "";
+          // Query role from DB if agentMap is stale (cross-project agents may not be in map)
+          const role = agent?.role ?? await this._getAgentRole(task?.owner_agent_id ?? null);
 
           // ── 3-Stage Pipeline: Generator → Evaluator(s) → Done ──
           if (isGeneratorRole(role)) {
@@ -909,8 +923,9 @@ export class Orchestrator {
                 completed++;
                 await this.propagateContext(taskId);
               } else {
-                remaining.delete(taskId);
-                blocked++;
+                // Quality gate failed — keep task in remaining so InFix recovery can retry it
+                console.log(`[QualityGate] FAILED for "${task.title}" — keeping in loop for InFix retry`);
+                // Don't delete from remaining — InFix recovery at top of while-loop will handle it
               }
             }
           } else if (isEvaluatorRole(role)) {
@@ -936,7 +951,7 @@ export class Orchestrator {
                 }
               }
             } else if (gateReport) {
-              // Evaluation failed → move evaluator to InFix
+              // Evaluation failed → move to InFix, keep in remaining for retry
               console.log(`[QualityGate] ${gateReport.summary}`);
               const failedGates = gateReport.gates
                 .filter(g => !g.passed)
@@ -950,21 +965,8 @@ export class Orchestrator {
                   version: fresh.version,
                 });
               }
-              remaining.delete(taskId);
-              blocked++;
-
-              // Cascade: evaluator failed → reassign (goes back to Backlog via failTask if retries remain)
-              // Also check parent — if this eval is permanently blocked, parent goes to InFix
-              if (task.parent_task_id) {
-                await this.checkAndCompleteGeneratorTask(task.parent_task_id);
-                // Parent may now be InFix — remove from remaining if so
-                const parent = this.taskGraph.getTask(task.parent_task_id);
-                if (parent && (parent.status === "InFix" || parent.status === "Blocked" || parent.status === "Done")) {
-                  remaining.delete(task.parent_task_id);
-                  if (parent.status === "Done") completed++;
-                  else blocked++;
-                }
-              }
+              // Keep in remaining — InFix recovery at top of while-loop will retry it
+              console.log(`[QualityGate] Evaluator FAILED for "${task.title}" — keeping in loop for retry`);
             } else {
               // No gate report → promote to Done anyway
               const fresh = this.taskGraph.getTask(taskId);
@@ -1010,8 +1012,8 @@ export class Orchestrator {
                   version: fresh.version,
                 });
               }
-              remaining.delete(taskId);
-              blocked++;
+              // Keep in remaining — InFix recovery at top of while-loop will retry it
+              console.log(`[QualityGate] Planner FAILED for "${task.title}" — keeping in loop for retry`);
             } else {
               remaining.delete(taskId);
               completed++;

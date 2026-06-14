@@ -89,8 +89,8 @@ export class TaskGraph {
         id, project_id, title, description, status, priority, complexity,
         required_capabilities, acceptance_criteria, expected_output,
         max_retries, timeout_ms, version, retry_count, phase,
-        created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        parent_task_id, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         id,
         input.project_id,
@@ -107,6 +107,7 @@ export class TaskGraph {
         1,   // version
         0,   // retry_count
         (input as any).phase ?? null,
+        input.parent_task_id ?? null,
         now,
         now,
       ]
@@ -261,6 +262,10 @@ export class TaskGraph {
       updates.push("owner_agent_id = ?");
       params.push(input.owner_agent_id);
     }
+    if (input.retry_count !== undefined) {
+      updates.push("retry_count = ?");
+      params.push(input.retry_count);
+    }
     if (input.error_message !== undefined) {
       updates.push("error_message = ?");
       params.push(input.error_message);
@@ -362,6 +367,17 @@ export class TaskGraph {
       [projectId]
     ).map(rowToDep);
     return { tasks, edges };
+  }
+
+  /**
+   * Get all child tasks that have the given parent_task_id.
+   * Used by the 3-stage pipeline to find evaluation tasks for a generator task.
+   */
+  getChildrenByParent(parentTaskId: string): TaskNode[] {
+    return queryAll(
+      "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC",
+      [parentTaskId]
+    ).map(rowToTask);
   }
 
   /**
