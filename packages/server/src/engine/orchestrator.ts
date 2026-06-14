@@ -202,6 +202,11 @@ export class Orchestrator {
   // ═══════════════════════════════════════════════════════════
 
   async analyzeComplexity(title: string, description: string): Promise<ComplexityReport> {
+    // ── Model selection: pro for substantial tasks, flash for trivial ones ──
+    const descLen = (description || "").length;
+    const usePro = descLen > 300; // real projects need pro-level analysis
+    const model = usePro ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
+
     const prompt = `分析以下软件任务的复杂度。返回纯 JSON（不要 markdown 代码块）。
 **输出语言：简体中文。** reasoning 用中文写，estimatedPhases 用中文。
 
@@ -216,7 +221,7 @@ export class Orchestrator {
 任务描述: ${description}`;
 
     try {
-      const output = await askClaude(prompt);
+      const output = await askClaude(prompt, model);
       try {
         const json = extractJson(output);
         const phases = (json.estimatedPhases ?? []) as string[];
@@ -282,8 +287,10 @@ export class Orchestrator {
 需求标题: ${title}
 需求描述: ${description}`;
 
+    // Use pro for complex decomposition — flash is too weak for multi-phase planning
+    const decompModel = complexity.score >= 6 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
     try {
-      const output = await askClaude(prompt);
+      const output = await askClaude(prompt, decompModel);
       try {
         const json = extractJson(output);
         const raw = (json.subTasks ?? []).map((t: any) => ({
