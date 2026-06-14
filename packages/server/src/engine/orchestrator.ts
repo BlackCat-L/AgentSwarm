@@ -207,18 +207,25 @@ export class Orchestrator {
     const usePro = descLen > 300; // real projects need pro-level analysis
     const model = usePro ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
 
-    const prompt = `分析以下软件任务的复杂度。返回纯 JSON（不要 markdown 代码块）。
-**输出语言：简体中文。** reasoning 用中文写，estimatedPhases 用中文。
+    const prompt = `你是软件项目复杂度评估专家。分析以下任务，返回纯 JSON。
 
-{
-  "score": <1-10>,
-  "reasoning": "<为什么是这个分数，中文一句话>",
-  "suggestedAgentCount": <建议几个agent并行>,
-  "estimatedPhases": ["需要哪些阶段，中文描述，如: 前端UI、数据层、测试验证"]
-}
+## 评分标准
+- 1-2: 单文件修改、配置调整、文案修改
+- 3-4: 2-3 个文件、简单功能添加
+- 5-6: 多文件、跨模块、需要设计思考
+- 7-8: 全栈项目、多阶段、需要架构设计
+- 9-10: 大型系统、多子系统集成
 
-任务标题: ${title}
-任务描述: ${description}`;
+## 规则
+- suggestedAgentCount: 实际需要的 agent 数，不是越多越好。单文件=1，全栈=3-4
+- estimatedPhases: 用 1-4 个中文词描述阶段，如 "数据模型、API开发、前端界面、集成测试"
+- **禁止虚高评分**：纯前端项目不要加后端阶段，简单功能不要加测试阶段
+
+返回 JSON（无 markdown）:
+{ "score": <1-10>, "reasoning": "<一句话>", "suggestedAgentCount": <1-4>, "estimatedPhases": ["阶段1", "阶段2"] }
+
+任务: ${title}
+${description}`;
 
     try {
       const output = await askClaude(prompt, model);
@@ -252,40 +259,33 @@ export class Orchestrator {
   async decomposeTask(
     title: string, description: string, complexity: ComplexityReport
   ): Promise<DecompositionResult> {
-    const prompt = `你是一个软件架构师。把以下需求拆解成具体的子任务。
-返回纯 JSON（不要 markdown 代码块）。
-**输出语言：简体中文。** 标题、描述、验收标准全部用中文写。
-**最多创建 4 个子任务。** 合并相似工作，不要过度拆分。
+    const prompt = `你是软件架构师。把需求拆成 ${Math.min(complexity.suggestedAgentCount, MAX_SUBTASKS)} 个以内子任务。返回纯 JSON。
 
-能力标签必须从以下 5 个标签中选择。**每个子任务最多选 2 个最相关的标签，精准匹配，不要全部打上：**
-- frontend      (前端/UI/组件/样式/交互)
-- architecture  (架构设计/后端逻辑/API/数据库/DevOps/模块划分)
-- testing       (测试/验证/QA/代码审查)
-- performance   (性能优化/缓存/加速)
-- security      (安全/认证/授权/加密/权限)
+## 约束
+- 最多 ${MAX_SUBTASKS} 个子任务，合并相关工作
+- 每个子任务必须是独立可交付的（一个 agent 一次完成）
+- 验收标准必须具体可验证（不是"功能正常"这种）
 
+## 能力标签（5 选，不要编造）
+- frontend: 前端/UI/组件/样式
+- architecture: 后端/API/数据库/DevOps/架构
+- testing: 测试/验证/QA
+- performance: 性能优化/缓存
+- security: 安全/认证/加密
+
+返回 JSON:
 {
   "subTasks": [
-    {
-      "title": "子任务标题",
-      "description": "详细描述（包含具体要做什么、涉及哪些文件）",
-      "requiredCapabilities": ["frontend"],
-      "dependsOn": [0],
-      "acceptanceCriteria": "可验证的完成标准"
-    }
+    { "title": "中文标题", "description": "100字以上，涉及哪些文件",
+      "requiredCapabilities": ["architecture"], "dependsOn": [],
+      "acceptanceCriteria": "可验证标准" }
   ],
-  "estimatedTotalMinutes": <估计总分钟数>,
-  "recommendedModel": "<deepseek-v4-pro[1m]|deepseek-v4-flash>"
+  "estimatedTotalMinutes": <数字>,
+  "recommendedModel": "deepseek-v4-flash"
 }
 
-规则:
-- dependsOn 是数组索引，[0] 表示依赖第0个子任务，第一个子任务用 []
-- requiredCapabilities 必须用上面列出的标签，不要自己编造
-- 复杂度: ${complexity.score}/10，建议 ${complexity.suggestedAgentCount} 个agent并行
-- 每个子任务描述要足够详细（100字以上），包含涉及的文件
-
-需求标题: ${title}
-需求描述: ${description}`;
+复杂度: ${complexity.score}/10 | 阶段: ${complexity.estimatedPhases.join(", ")}
+需求: ${title} — ${description}`;
 
     // Use pro for complex decomposition — flash is too weak for multi-phase planning
     const decompModel = complexity.score >= 6 ? "deepseek-v4-pro[1m]" : "deepseek-v4-flash";
