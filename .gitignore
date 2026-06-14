@@ -86,3 +86,9 @@ __pycache__/
 GitHub
 # ── Personal scan reports ───────────────────────────────
 .claude/skills/xiaoliu666/scripts/*扫描报告.md
+
+# ── Debug/temp artifacts ──────────────────────────────────
+.claude/.edit-count
+hello.txt
+task-breakdown.json
+packages/server/task-breakdown.json
