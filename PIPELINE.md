@@ -150,7 +150,7 @@ selectBestAgent(allAgents, task.required_capabilities)
 - 复杂度 ≥ 3 → **交互模式**（无 `-p` flag），Agent 可调 `Skill()` 等全部工具
 - 复杂度 < 3 → **print 模式**（`-p` flag），更快，适合简单任务
 
-**并发控制**: `MAX_CONCURRENT_SPAWNS = 3`，批次间隔 2 秒
+**并发控制**: `MAX_CONCURRENT_SPAWNS = 2`，批次间隔 2 秒
 
 **Prompt 注入层级**:
 ```
@@ -212,10 +212,12 @@ Generator 任务 Done
 
 | Gate | 触发条件 | 模型 | 功能 |
 |------|---------|------|------|
-| Acceptance | 始终 | flash | 审查输出是否满足验收标准 |
+| Acceptance | 始终 | flash | 审查输出是否满足验收标准；简单任务内联检查不 spawn |
 | Review | 复杂任务 (>500 字描述) | pro | 对抗性质量检查（逻辑/性能/安全/冗余） |
-| Simplify | 输出 >2000 行代码 | flash | 检测重复代码和过度复杂逻辑 |
+| Simplify | 输出 >2000 字符 | flash | 检测重复代码和过度复杂逻辑 |
 | Learn | 任何 Gate 失败 | flash | 自动提炼学习规则写入 `.learnings/ERRORS.md` |
+
+> **成本优化**: 评估任务（审查:/Review:/验证:/Security Review:）跳过全部门禁；简单任务（输出<500字符）acceptance 用内联检查不 spawn Claude Code。Review 是唯一仍用 pro 的门禁（需要深度推理）。
 
 全部通过 → Done。任一失败 → InFix（附具体问题和修复建议）。
 
@@ -247,7 +249,7 @@ POST /api/auto { project_id, title, description }
   │     │
   │     ├── 3d. 执行循环 (while remaining > 0)
   │     │   ├── 筛选 ready 任务 (InDev + 依赖满足)
-  │     │   ├── 批次执行 (MAX 3 concurrent, 间隔 2s)
+  │     │   ├── 批次执行 (MAX 2 concurrent, 间隔 2s)
   │     │   │   └→ executeTask() → spawnClaudeWithRetry(2)
   │     │   ├── QualityGateService.runGates()
   │     │   ├── createEvaluationTasks() [Generator 任务]
@@ -262,6 +264,17 @@ POST /api/auto { project_id, title, description }
 ---
 
 ## 5. 关键机制
+
+### 5.0 硬限制（防止 token 浪费）
+
+```
+MAX_PHASES = 4      // 复杂度分析最多 4 个阶段
+MAX_SUBTASKS = 5     // AI 分解最多 5 个子任务
+MAX_CONCURRENT_SPAWNS = 2  // 同时最多 2 个 Claude Code 进程
+task.max_retries = 3  // 每个任务最多重试 3 次
+```
+
+> 一个 7 文件项目：之前被分解成 70 任务 → 700+ spawns。现在硬限制下最多 ~30 spawns。
 
 ### 5.1 Agent 分配
 
