@@ -1,14 +1,11 @@
 # Agent Swarm — Dark Factory
 
-> Type what you want. 12 agents figure out the rest.
+> **一个人审 AI 的代码是加班，12 个 AI 互相审是交付。**
+>
+> AI writing code isn't scary — code with no review is. That's what we fix.
+> Cursor gives you one AI. We give you a team.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs)](https://nodejs.org/)
-[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
-[![Hono](https://img.shields.io/badge/Hono-4.x-360D0D)](https://hono.dev/)
-
-A local dev tool that turns a feature description into working code. You write what you need, a team of 12 agents splits it up, writes the code, and checks each other's work. There's a kanban board so you can see what's happening.
+You write the spec. 12 agents split it up, write the code, and check each other's work — so you write specs, not code reviews.
 
 ![Agent Swarm Dashboard](docs/dashboard.png)
 
@@ -51,9 +48,9 @@ pnpm dev          # API (:5120) + Web (:5173)
 
 ## Usage
 
-### From VS Code
+### From Claude Code
 
-In any project, type:
+In any project, type `/swarm` followed by what you want — works in VS Code, terminal, anywhere Claude Code runs:
 
 ```
 /swarm Build a user management system with registration, login, and role management

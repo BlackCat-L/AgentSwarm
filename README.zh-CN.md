@@ -1,14 +1,11 @@
 # Agent Swarm — Dark Factory
 
-> 输入需求，12 个 Agent 帮你拆、写、审。
+> **一个人审 AI 的代码是加班，12 个 AI 互相审是交付。**
+>
+> AI 写代码不可怕，没人审才可怕。Cursor 给你一个 AI，我给你一个团队。
+> 你只管提需求，代码质量和 bug 不用操心。
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs)](https://nodejs.org/)
-[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
-[![Hono](https://img.shields.io/badge/Hono-4.x-360D0D)](https://hono.dev/)
-
-输入一句需求，12 个 Agent 自动拆分任务、写代码、互相审查。自带看板，VS Code 任何项目里都能用。
+输入需求，12 个 Agent 自动拆分、编码、审查、交付。你的工作是提需求，不是审代码。
 
 ![Agent Swarm 看板](docs/dashboard.png)
 
@@ -23,9 +20,9 @@
 | Node.js | ≥ 22 | [nodejs.org](https://nodejs.org/) 下载 LTS |
 | pnpm | ≥ 11 | 启动脚本自动装 |
 | Claude Code CLI | 最新版 | `npm install -g @anthropic-ai/claude-code` |
-| API Key | — | DeepSeek 或其他 Anthropic 兼容 API |
+| API Key | — | 推荐使用 DeepSeek 或其他 Anthropic 兼容 API |
 
-> **DeepSeek 配置**：在 Claude Code 的 `settings.json` 里设好 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`。支持的模型：`deepseek-v4-pro[1m]`、`deepseek-v4-flash`。
+> **DeepSeek 配置**：在 Claude Code 的 `settings.json` 里设好 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`。支持的模型：`deepseek-v4-pro[1m]`、`deepseek-v4-flash`，相当于强制把deepseek的模型能力提高到最高，避免因为模型能力不足导致的任务拆分错误。
 
 ### 启动
 
@@ -49,9 +46,9 @@ pnpm dev          # API (:5120) + Web 看板 (:5173)
 
 ## 怎么用
 
-### 在 VS Code 里用
+### 在 Claude Code 里用
 
-随便打开一个项目，输入：
+打开任意项目，输入 `/swarm` + 你的需求——VS Code、终端，只要有 Claude Code 的地方都能用：
 
 ```
 /swarm 开发一个用户管理系统，支持注册、登录、角色分配
