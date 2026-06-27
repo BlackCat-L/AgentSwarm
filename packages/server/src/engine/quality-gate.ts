@@ -301,7 +301,7 @@ ${output.slice(-3000)}
 
 审查结论:`;
 
-    const verdict = await quickAsk(prompt, "deepseek-v4-pro[1m]");
+    const verdict = await quickAsk(prompt);
     const passed = verdict.toUpperCase().includes("PASS") && !verdict.includes("FAIL:");
 
     return {

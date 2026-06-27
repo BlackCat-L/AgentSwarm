@@ -1049,9 +1049,34 @@ export class ExecutionService {
     return true;
   }
 
+  /** Lightweight prompt for simple tasks (complexity ≤ 2). Saves ~80% token cost. */
+  private _buildLightPrompt(task: TaskNode, agent?: AgentInstance): string {
+    const role = agent?.role ? ROLE_SKILL_INJECTION[agent.role] : null;
+    return [
+      role ?? "你是一个软件工程师。完成以下任务。",
+      "",
+      "## 任务",
+      task.title,
+      "",
+      task.description ?? "",
+      "",
+      task.acceptance_criteria ? "## 验收标准" : "",
+      task.acceptance_criteria ?? "",
+      "",
+      "---",
+      "完成后输出: 1.改了什么 2.怎么验证的",
+    ].filter(Boolean).join("\n");
+  }
+
   private async _buildPrompt(task: TaskNode, agent?: AgentInstance, projectCwd?: string): Promise<string> {
-    const p: string[] = [];
     const complexity = estimateComplexity(task);
+
+    // ── ⚡ Fast path: light prompt for simple tasks (saves ~80% token cost) ──
+    if (complexity <= 2) {
+      return this._buildLightPrompt(task, agent);
+    }
+
+    const p: string[] = [];
 
     // ═══════════════════════════════════════════════════════════
     // ── Layer -1: Retry warning (inject failure context) ──

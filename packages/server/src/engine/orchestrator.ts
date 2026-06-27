@@ -1052,7 +1052,9 @@ ${description}`;
           batch.map(taskId => {
             const task = this.taskGraph.getTask(taskId);
             const agent = task?.owner_agent_id ? agentMap.get(task.owner_agent_id) : undefined;
-            const model = agent?.model || "deepseek-v4-pro[1m]";
+            // Simple tasks → flash model (saves money, sufficient quality)
+            const isSimple = !task?.required_capabilities?.length || task.required_capabilities.length <= 1;
+            const model = isSimple ? "deepseek-v4-flash" : (agent?.model || "deepseek-v4-pro[1m]");
             return executor.executeTask(taskId, model, agent).catch(e => ({ success: false, output: "", error: e.message }));
           })
         );

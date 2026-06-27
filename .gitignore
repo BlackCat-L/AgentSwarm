@@ -5,90 +5,51 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# ── Database ────────────────────────────────────────────
+# ── Database files ──────────────────────────────────────
 *.db
-__test_*.db
 
 # ── Screenshots & test artifacts ────────────────────────
 *.png
 *.jpg
+!docs/dashboard.png
 .claude/playwright-snapshots/
-
-# ── External projects ───────────────────────────────────
-github_copy/
-docs/
 
 # ── OS files ────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-# ── Personal config (keep .claude/ but exclude personal) ─
+# ── Personal config ─────────────────────────────────────
 .claude/settings.local.json
 .claude/credentials.json
+.claude/settings.json
+.mcp.json
 
-# ── Harness runtime ─────────────────────────────────────
+# ── Agent execution temp files ──────────────────────────
+packages/server/*.py
+packages/server/*.txt
+packages/server/tasks.json
+packages/server/subtasks.json
+packages/server/tmp/
+
+# ── Session data ────────────────────────────────────────
 memory/
 .learnings/
 .config/
-
-# ── Test artifacts ──────────────────────────────────────
-*.yml
-*.yaml
-!pnpm-lock.yaml
-!pnpm-workspace.yaml
-!docker-compose.yml
-!**/*.yaml.md
-
-# ── Agent execution artifacts ───────────────────────────
-packages/server/*.py
-
-# ── Session data ────────────────────────────────────────
 .claude/session-audit.json
-.claude/settings.json
 
 # ── Generated ───────────────────────────────────────────
 .auto-agent/gen-tasks.js
 
-# ── Trash/backup DB files ───────────────────────────────
+# ── Temp/trash ──────────────────────────────────────────
 *.trash
 *.prev
 *.prev2
 .trash-*
-
-# ── Temp fix scripts ─────────────────────────────────────
-packages/server/new-strict-mode.txt
-packages/server/apply-fix.py
-packages/server/apply-spawn-fix.py
-
-# ── Agent swarm test artifacts ───────────────────────────
-packages/server/src/routes/health-extended.ts
-packages/server/src/routes/status-extended.ts
-packages/server/subtasks.json
-packages/server/tmp/
-
-# ── Personal scripts ─────────────────────────────────────
-*.ps1
-relocate.bat
-temp-clean.bat
-index.html
-
-# ── Temp fix files ───────────────────────────────────────
-packages/server/*-fix.txt
-packages/server/*-fix.py
-packages/server/tasks.json
-
-# ── Misc ────────────────────────────────────────────────
 *.log
 .tmp/
 temp/
 __pycache__/
-GitHub
-# ── Personal scan reports ───────────────────────────────
-.claude/skills/xiaoliu666/scripts/*扫描报告.md
 
-# ── Debug/temp artifacts ──────────────────────────────────
+# ── Debug artifacts ─────────────────────────────────────
 .claude/.edit-count
-hello.txt
-task-breakdown.json
-packages/server/task-breakdown.json

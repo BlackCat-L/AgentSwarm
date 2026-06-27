@@ -1,391 +1,380 @@
 # Agent Swarm — Dark Factory
 
-> **输入需求，拿走可部署的代码。中间零人类参与。**
+> 输入需求，12 个 Agent 帮你拆、写、审。
 
-Agent Swarm 是一个本地优先的**全自主多 Agent 开发调度平台**。12 个 AI Agent 角色并行协作，从需求分析 → 任务分解 → 分配执行 → 质量门禁 → 代码交付全自动完成。48 个 Skills 为每个 Agent 提供专业工具能力。带 7 列看板实时追踪进度，支持 VS Code 一句话跨项目触发。
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
+[![Hono](https://img.shields.io/badge/Hono-4.x-360D0D)](https://hono.dev/)
+
+输入一句需求，12 个 Agent 自动拆分任务、写代码、互相审查。自带看板，VS Code 任何项目里都能用。
+
+![Agent Swarm 看板](docs/dashboard.png)
 
 ---
 
 ## 快速开始
 
-### 一键启动（推荐）
+### 环境要求
 
-**Windows**：双击 `start.bat`（自动安装 Node.js + pnpm + 全局 /swarm skill + 启动服务）
+| 组件 | 最低版本 | 说明 |
+|------|---------|------|
+| Node.js | ≥ 22 | [nodejs.org](https://nodejs.org/) 下载 LTS |
+| pnpm | ≥ 11 | 启动脚本自动装 |
+| Claude Code CLI | 最新版 | `npm install -g @anthropic-ai/claude-code` |
+| API Key | — | DeepSeek 或其他 Anthropic 兼容 API |
+
+> **DeepSeek 配置**：在 Claude Code 的 `settings.json` 里设好 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`。支持的模型：`deepseek-v4-pro[1m]`、`deepseek-v4-flash`。
+
+### 启动
+
+**Windows**：双击 `start.bat`。它会检查 Node.js、装好 pnpm、注册全局 `/swarm`，然后启动服务。
 
 **Mac/Linux**：
 ```bash
 ./start.sh
 ```
 
+打开 `http://localhost:5173` 就能看到 12 个 Agent。
+
 ### 手动启动
 
 ```bash
 pnpm install
-pnpm dev          # 同时启动 API (:5120) + Web 看板 (:5173)
+pnpm dev          # API (:5120) + Web 看板 (:5173)
 ```
-
-> 浏览器自动打开 `http://localhost:5173`
-
-### 单独启动组件
-
-```bash
-pnpm dev:server          # 仅 API（带 tsx watch 热重载，开发时用）
-pnpm dev:server:stable   # 仅 API（无 watch，Swarm 生产模式——agent 改代码不会触发重启崩溃）
-pnpm dev:web             # 仅 Web 看板
-```
-
-> 环境要求: Node.js ≥ 22, pnpm ≥ 11, Claude Code CLI 已安装
 
 ---
 
-## 三种使用方式
+## 怎么用
 
-### 方式 ① VS Code 一句话跨项目（推荐）
+### 在 VS Code 里用
 
-在**任意 VSCode Claude Code 项目**中输入：
+随便打开一个项目，输入：
 
 ```
-/swarm 开发一个用户管理系统，支持注册、登录、密码修改、角色分配
+/swarm 开发一个用户管理系统，支持注册、登录、角色分配
 ```
 
-Agent Swarm 自动：
-1. 注册当前项目（自动检测路径）
-2. 分析复杂度 → AI 拆解子任务 + DAG
-3. 按能力评分分配 Agent（Planner → Generator → Evaluator）
-4. 并行执行（最多 3 并发，批次间退避）
-5. 4 道质量门禁验收
-6. Agent 在**目标项目目录**下工作，代码直接写入目标项目
+然后发生的事情：
+1. 自动识别当前项目，注册到平台
+2. 一个 Agent 读需求，拆成子任务
+3. 子任务分给合适的 Agent
+4. Agent 并行干活（最多 3 个同时跑）
+5. 每个任务完成后走审查
+6. 代码直接写进你项目里
 
 打开 `http://localhost:5173` 看进度。
 
-### 方式 ② Web 看板手动操作
+### 在网页看板操作
 
-1. 按 N → 新建任务 → 填写标题和描述
-2. 点卡片「查看详情」→ 下拉选 Agent → 状态变 InDev
-3. 点绿色「▶ 执行」按钮 → Claude Code 开始工作
-4. 等待 Done → 详情面板展示执行结果 + 质量门禁判定
+- 点「新建任务」，填标题和描述
+- 点卡片详情，选个 Agent，状态变成 InDev
+- 点「执行」，Agent 开始工作
+- 完成后能看到它输出了什么
 
-### 方式 ③ API 程序化调用
+### 调 API
 
 ```bash
-# 一句话全自动（跨项目：project path 指向目标项目）
-curl -X POST http://localhost:5120/api/auto \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{"project_id":"<ID>","title":"开发一个登录API","description":"..."}'
+python3 -c "
+import urllib.request, json
+body = json.dumps({
+    'project_id': '<ID>',
+    'title': '开发登录API',
+    'description': '实现用户登录功能...'
+}, ensure_ascii=False).encode('utf-8')
+req = urllib.request.Request('http://localhost:5120/api/auto', data=body, method='POST')
+req.add_header('Content-Type', 'application/json; charset=utf-8')
+resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
+print(resp)
+"
+```
 
-# 创建跨项目记录
-curl -X POST http://localhost:5120/api/projects \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{"name":"我的项目","path":"F:/company/my-project"}'
+> Windows 上别用 bash curl 传中文——bash 的 GBK codepage 会把 UTF-8 搞坏。用 Python。
+
+---
+
+## 看板状态
+
+```mermaid
+stateDiagram-v2
+    Backlog --> InDev: 分配Agent
+    InDev --> ReadyForTest: Agent执行完
+    ReadyForTest --> Done: 审查通过
+    ReadyForTest --> InFix: 审查没通过
+    InFix --> InDev: 修完重来
+    InDev --> Blocked: 卡住了
 ```
 
 ---
 
-## 看板状态流转
+## 12 个 Agent
 
-```
-Backlog ─→ InDev ─→ ReadyForTest ─→ ReadyForDeploy ─→ Done
-               ↓           ↓
-            InFix ←─────────┘  (质量门禁未通过)
-               ↓
-           Blocked
-```
+| # | 角色 | 模型 | 类别 | 干什么 |
+|---|------|------|------|------|
+| 1 | 编排官 | pro | Planner | 读需求，拆任务 |
+| 2 | 产品经理 | pro | Planner | 把想法变成具体规格 |
+| 3 | 软件架构师 | pro | Planner | 设计整体结构 |
+| 4 | 后端架构师 | pro | Generator | 写 API 和数据模型 |
+| 5 | 前端架构师 | pro | Generator | 设计路由和组件树 |
+| 6 | 数据库优化师 | pro | Generator | 查询、索引、迁移 |
+| 7 | 安全工程师 | pro | Evaluator | 查漏洞 |
+| 8 | 代码审查师 | pro | Evaluator | 审代码 |
+| 9 | UI 设计师 | flash | Generator | 视觉和交互 |
+| 10 | 前端开发 | flash | Generator | 写组件和状态 |
+| 11 | DevOps 自动化 | flash | Generator | 脚本、CI、部署 |
+| 12 | 测试 QA | flash | Evaluator | 测试验收 |
 
-- **Backlog → InDev**：必须走「分配 Agent」
-- **InDev → ReadyForTest**：Agent 执行完成后自动流转
-- **ReadyForTest → Done**：4 道质量门禁全部通过
-- **ReadyForTest → InFix**：门禁未通过，退回修复
-- **非法流转**：API 返回 422，看板拖拽自动回弹
+> 8 个用 `deepseek-v4-pro[1m]`（重思考），4 个用 `deepseek-v4-flash`（快又便宜）。每个 Agent 启动时 `ANTHROPIC_MODEL` 环境变量会被删掉，这样 `--model` 参数能直通 API。
 
----
-
-## 12-Agent 角色体系
-
-| # | 角色 | 模型 | 严格模式类别 | 职责 |
-|---|------|------|------------|------|
-| 1 | 编排官 | pro | Planner | 需求分析、任务分解、流程编排 |
-| 2 | 产品经理 | pro | Planner | 用户故事、验收标准、产品决策 |
-| 3 | 软件架构师 | pro | Planner | 系统设计、接口契约、模块划分 |
-| 4 | 后端架构师 | pro | Generator | API 设计、数据模型、后端实现 |
-| 5 | 前端架构师 | pro | Generator | 路由设计、组件树、性能策略 |
-| 6 | 数据库优化师 | pro | Generator | 查询优化、索引设计、数据迁移 |
-| 7 | 安全工程师 | pro | Evaluator | 威胁面扫描、漏洞检测、权限审计 |
-| 8 | 代码审查师 | pro | Evaluator | 四维评分、代码质量、合规检查 |
-| 9 | UI 设计师 | flash | Generator | 视觉设计、交互规范、无障碍 |
-| 10 | 前端开发 | flash | Generator | 组件实现、状态管理、响应式 |
-| 11 | DevOps 自动化 | flash | Generator | 部署脚本、CI/CD、环境管理 |
-| 12 | 测试 QA | flash | Evaluator | 测试用例、验收验证、风险评估 |
-
-> **模型分层**：8 个重角色用 `deepseek-v4-pro[1m]`（分析/设计/审查），4 个轻角色用 `deepseek-v4-flash`（实现/验证），分散 API 端点压力。
+每个角色具体怎么工作、有什么规则，定义在 [`execution-service.ts`](packages/server/src/engine/execution-service.ts)。完整参考见 [agent-team-reference.md](docs/agent-team-reference.md)。
 
 ---
 
-## 质量门禁系统
+## 任务审查
 
-每个任务执行后，自动通过 4 道门禁：
+每个任务完成后过 4 道检查：
 
-| Gate | 触发条件 | 功能 | 模型 |
-|------|---------|------|------|
-| Acceptance | 始终 | 审查输出是否满足验收标准 | haiku |
-| Review | 复杂任务 (>500 字描述) | 对抗性质量检查（逻辑/性能/安全/冗余） | sonnet |
-| Simplify | 输出 >2000 行代码 | 检测重复代码和过度复杂逻辑 | haiku |
-| Learn | 任何 Gate 失败 | 自动提炼学习规则写入 `.learnings/ERRORS.md` | haiku |
+| 检查 | 触发条件 | 做什么 |
+|------|---------|--------|
+| 验收 | 每次都跑 | 输出和规格对不对得上 |
+| 审查 | 大任务 | 查逻辑错误、性能坑、安全漏洞 |
+| 简化 | 输出太长 | 找重复代码和过度复杂的地方 |
+| 学习 | 有没过 | 记录失败原因，下次避免 |
 
-> 全部通过 → Done。任一失败 → InFix（附具体问题和修复建议）。
-
----
-
-## Skill 生态系统
-
-Agent 在执行任务时**主动调用**匹配的 Skill（非被动装饰）。`SKILL_USAGE_GUIDE` 注入每个 prompt 确保实际使用。
-
-### 48 个全局 Skills（`~/.claude/skills/`）
-
-| 类别 | Skills | 用途 |
-|------|--------|------|
-| **开发流程** | auto-agent, agent-optimizer, agent-md-advisor | 6 步法、12-Factor、CLAUDE.md 编写 |
-| **代码质量** | code-review, simplify, code-review-unity | 审查、简化、Unity 专项 |
-| **安全** | security-review, security-hardening | 安全审查、威胁面扫描 |
-| **产品设计** | pm-perspective, game-designer-toolkit, huo15-mind-map | 产品决策、GDD、思维导图 |
-| **工具** | git, mermaid, tavily, moark-doc-extraction, prompt-optimizer | 版本控制、流程图、搜索、文档提取 |
-| **运维** | session-cleaner, skill-optimizer, find-skills, skill-vetter, claude-config-advisor | 会话清理、skill 管理 |
-| **飞书** | lark-* (16 个) | IM、文档、日历、审批、OKR 等 |
-| **其他** | accurate-assistant, github, netease-uu-booster | 准确率模式、GitHub、游戏加速 |
-
-### Skill 使用机制
-
-每个 Agent 的 prompt 包含 `SKILL_USAGE_GUIDE`——明确列出可用 skill 和触发条件：
-
-```
-| 场景 | 调用 Skill |
-|------|-----------|
-| 代码审查 | Skill("code-review") |
-| 流程图 | Skill("mermaid") |
-| Git 操作 | Skill("git") |
-| 安全审查 | Skill("security-review") |
-...
-```
-
-**铁律**：遇到上表场景不调用 Skill = 漏步骤 = Bug。
+> 全过 → Done。没过 → InFix，附带问题清单和修改建议。
 
 ---
 
-## AI 编排引擎
+## Agent 的指令
 
-### 复杂度分析
-
-AI 自动评分 1-10，决定并行 agent 数量和拆解粒度。AI 不可用时自动降级为关键词评分。
-
-### 任务分解
-
-大需求自动拆解为子任务 + DAG 依赖 + 能力标签。例如"开发用户管理系统"：
+每个 Agent 收到的指令由 5 层拼出来：
 
 ```
-[0] 数据库设计 ──→ [1] 认证模块 ──→ [2] CRUD API ──→ [4] 前端界面
-                                     ↓
-                                  [3] 权限控制 ──→ [5] 集成测试
+角色身份  →  工作方法  →  领域知识  →  任务内容  →  输出格式
+(你是谁)     (怎么干)     (专业什么)    (干什么)     (怎么汇报)
 ```
 
-### 3 角色严格模式（复杂度 ≥ 6）
+### 领域知识匹配
 
-高复杂度任务自动激活角色分离，与 12-agent 蜂群对齐：
+| 领域 | 触发词 | 注入什么 |
+|------|--------|---------|
+| 数据库 | sql, query, migration | 迁移规范、索引规则 |
+| API | rest, endpoint, backend | REST 约定、错误格式 |
+| 安全 | auth, login, password | 输入校验、哈希 |
+| 测试 | test, qa, validation | 覆盖率、边界值 |
+| 前端 | ui, component, react | 状态处理、浏览器测试 |
+| 运维 | ci, cd, deploy, docker | 脚本、回滚 |
+| 性能 | optimization, cache | 先测量、N+1 检测 |
+| 架构 | design, system, module | 契约、依赖审查 |
 
-```
-Planner（编排官/产品经理/软件架构师）
-  → 输出 Sprint Contract → 交给 Generator
-
-Generator（后端架构师/前端开发/数据库优化师/DevOps/UI设计师）
-  → 读取契约，实现代码 → 交给 Evaluator
-
-Evaluator（代码审查师/测试QA/安全工程师）
-  → 独立验收，按评分矩阵打分 → PASS/FAIL
-```
-
-### 契约传递
-
-上游任务完成后，输出自动注入为下游任务的上下文。架构师的 API_CONTRACT → 后端工程师的实现输入 → QA 的测试依据。
-
-### 并发控制
-
-`MAX_CONCURRENT_SPAWNS = 3`——同时最多 3 个 Claude Code 进程，批次间间隔 2 秒。防止 API 限流导致的进程崩溃（exit -1）。
-
-### 崩溃诊断 + 自动重试
-
-- `decodeExitCode()` 将 `4294967295` 翻译为可读原因（API key、网络、模型名、杀毒软件）
-- `spawnClaudeWithRetry()` 瞬态失败自动重试 2 次（2s→4s 退避），配置错误不重试
+> 任务类型从编排官读需求时提取。如果提取失败，有个关键词匹配器兜底。
 
 ---
 
-## 全自动管道 `/api/auto`
+## 工作原理
 
+### 读取需求
+
+编排官读你的输入，打个复杂度评分（1-10），决定拆多细。
+
+### 拆分任务
+
+大需求拆成小任务，每个任务有明确的依赖关系：
+
+```mermaid
+graph LR
+    A[数据库设计] --> B[认证模块]
+    B --> C[CRUD API]
+    C --> D[权限控制]
+    C --> E[前端界面]
+    D --> F[集成测试]
+    E --> F
 ```
-一句话需求
-  → AI 分析复杂度（askClaude）
-    → AI 拆解子任务 + DAG 依赖（askClaude）
-      → 能力评分匹配 Agent（EMA scoring）
-        → 按依赖顺序并行执行（MAX 3 concurrent）
-          → 4 道质量门禁（acceptance → review → simplify → learn）
-            → 契约传递到下游
-              → 全部 Done
+
+### 分配执行
+
+每个 Agent 领走自己擅长的。复杂任务会走更严格的流程。
+
+### 结果传递
+
+上游任务完成后，输出自动传给下游。比如架构师写的 API 设计 → 自动变成后端工程师的参考 → 再变成 QA 的测试依据。
+
+### 容错
+
+- 最多 3 个 Agent 同时跑，两两之间隔 2 秒
+- 进程挂了能从退出码看出原因（API key 错、网络不通、模型名不对……）
+- 非配置错误自动重试，2 次不成才放弃
+
+---
+
+## `/api/auto` 一条命令的背后
+
+```mermaid
+graph TD
+    A[你输入需求] --> B[分析复杂度]
+    B --> C[拆成子任务]
+    C --> D[分配给合适的Agent]
+    D --> E[按依赖顺序执行]
+    E --> F[4道审查]
+    F --> G[结果向下传递]
+    G --> H[全部完成]
 ```
 
 ---
 
 ## 架构
 
-```
-┌──────────────────────────────────────────────────┐
-│  Web UI (React 19 + Tailwind 4 + @dnd-kit)       │  ← :5173
-│  7列看板 · Agent面板 · 详情面板 · SSE 实时推送     │
-├──────────────────────────────────────────────────┤
-│  API Gateway (Hono 4, :5120)                     │
-│  REST 30+ 端点 · CORS · UTF-8 charset            │
-├──────────────────────────────────────────────────┤
-│  Orchestrator v2                                 │
-│  复杂度分析 · 任务分解 · 3角色分离 · 契约传递      │
-│  并发控制 (MAX 3) · 自动重试 · 崩溃诊断           │
-├──────────────────────────────────────────────────┤
-│  Execution Service                               │
-│  SKILL_USAGE_GUIDE 注入 · ROLE_SKILL_INJECTION   │
-│  12 角色专属 prompt · Skill Modules 动态匹配      │
-│  STRICT_MODE_BY_ROLE · AUTO_AGENT 6-step         │
-├──────────────────────────────────────────────────┤
-│  Quality Gate Service (4 gates)                  │
-│  Acceptance → Review → Simplify → Learn          │
-├──────────────────────────────────────────────────┤
-│  Claude Spawn Layer                              │
-│  spawnClaudeWithRetry · decodeExitCode · CWD     │
-├──────────────────────────────────────────────────┤
-│  Engine Layer                                    │
-│  TaskGraph · SharedServices · CapabilityScorer   │
-│  RuntimePool · RateLimiter · CircuitBreaker      │
-├──────────────────────────────────────────────────┤
-│  SQLite (sql.js WASM, 零配置)                    │
-│  9 tables + 11 indexes · v7 schema               │
-└──────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Frontend["Web UI :5173"]
+        Kanban[看板]
+        Agent[Agent面板]
+        Detail[详情面板]
+        SSE[SSE事件]
+    end
+
+    subgraph API["API :5120"]
+        Hono[Hono 4]
+        Routes[REST 端点]
+    end
+
+    subgraph Core["引擎"]
+        Orch[编排器]
+        Exec[执行服务]
+        QG[质量审查]
+        Spawn[进程管理]
+    end
+
+    subgraph Infra["基础设施"]
+        TG[任务图]
+        CS[能力评分]
+        RP[并发池]
+    end
+
+    subgraph DB["SQLite"]
+        Tables[9张表]
+    end
+
+    Frontend --> API
+    API --> Core
+    Core --> Infra
+    Infra --> DB
 ```
 
 ### 技术栈
 
-| 层 | 技术 |
+| 层 | 用的什么 |
 |----|------|
-| 语言 | TypeScript 5.x, strict mode |
+| 语言 | TypeScript 5.x |
 | 运行时 | Node.js 22+ |
-| 前端 | React 19 + Vite 7 + Tailwind 4 + @dnd-kit |
+| 前端 | React 19 + Vite 7 + Tailwind CSS 4 + @dnd-kit |
 | 后端 | Hono 4.x |
-| 数据库 | sql.js (SQLite WASM, 零配置) |
-| Agent 执行 | `spawn("claude", ...)` 真实 Claude Code 进程 + CWD 跨项目支持 |
-| Agent 身份 | Ed25519 密钥对 + JWT + SHA-256 fingerprint |
-| 并发控制 | MAX_CONCURRENT_SPAWNS=3 + 批次退避 2s |
-| Skills | 48 个全局 Skills + SKILL_USAGE_GUIDE 主动调用 |
+| 数据库 | sql.js（SQLite in WASM，不用装） |
+| Agent 运行 | 直接 spawn `claude` 进程 |
+| 模型 | DeepSeek V4 Pro / Flash（Anthropic 兼容 API） |
 
 ---
 
-## 跨项目 /swarm
-
-`/swarm` skill v2.0 已安装到全局（`~/.claude/skills/swarm/`），**无需在每个项目重复安装**。
-
-### 工作流
+## 项目结构
 
 ```
-你在任意 VSCode 项目中输入 /swarm <需求>
-  → Skill 自动检测当前项目路径 (os.getcwd())
-  → 注册项目到 Agent Swarm（如未注册）
-  → POST /api/auto 启动全自动管道
-  → Agent 在目标项目目录下工作（CWD = 项目路径）
-  → 代码直接写入目标项目
-  → 看板 http://localhost:5173 实时追踪
+packages/
+├── shared/src/types/         # 共享类型
+├── server/src/
+│   ├── engine/
+│   │   ├── orchestrator      # 读需求、拆任务、跑流水线
+│   │   ├── execution-service # 组装Agent指令、启动Claude Code
+│   │   ├── claude-spawn      # 进程管理+重试+诊断
+│   │   ├── quality-gate      # 事后审查
+│   │   ├── task-graph        # 任务依赖图+乐观锁
+│   │   ├── capability-scorer # 任务匹配Agent
+│   │   ├── runtime-pool      # 并发控制
+│   │   ├── rate-limiter      # 限流
+│   │   └── circuit-breaker   # 故障隔离
+│   ├── routes/               # REST API
+│   ├── db/                   # SQLite表结构+自动建队
+│   └── sse/                  # 实时推送
+├── web/src/
+│   ├── components/kanban/    # 看板
+│   ├── components/tasks/     # 任务创建、详情
+│   └── pages/                # 页面
+└── cli/src/                  # 命令行工具
 ```
-
-### 前提条件
-
-1. Agent Swarm 服务器运行中（双击 `start.bat`）
-2. 48 个 Skills 已安装到全局（`start.bat` 自动完成）
-3. Claude Code CLI 已安装
 
 ---
 
 ## API 参考
 
-基础路径: `http://localhost:5120/api`
-
-### 项目
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/projects` | 项目列表 |
-| POST | `/projects` | 创建项目（`path` 指向目标项目根目录） |
-| DELETE | `/projects/:id` | 删除项目（级联清理） |
+| GET | `/api/projects` | 项目列表 |
+| POST | `/api/projects` | 创建项目 |
+| GET | `/api/agents` | Agent 列表 |
+| POST | `/api/agents` | 注册 Agent |
+| GET | `/api/tasks` | 任务列表 |
+| POST | `/api/tasks` | 创建任务 |
+| PATCH | `/api/tasks/:id` | 更新任务 |
+| POST | `/api/tasks/:id/execute` | 执行任务 |
+| **POST** | **`/api/auto`** | **输入需求，一条命令全自动** |
+| POST | `/api/orchestrate` | 分析+拆解（不执行） |
+| GET | `/api/board` | 看板 |
+| GET | `/api/stats` | 统计 |
+| GET | `/api/events` | SSE 事件流 |
+| GET | `/api/health` | 健康检查 |
+| POST | `/api/kill-switch` | 紧急停止 |
 
-### Agent
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/agents` | Agent 列表 (`?role=&status=&project_id=`) |
-| POST | `/agents` | 注册 Agent（自动生成 Ed25519 身份） |
-| POST | `/agents/:id/heartbeat` | 心跳上报 |
-| PATCH | `/agents/:id` | 更新 Agent（状态/模型/权限） |
-| DELETE | `/agents/:id` | 删除 Agent + 清理关联数据 |
+---
 
-### 任务
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/tasks` | 任务列表（支持 `?status=&project_id=&agent_id=`） |
-| POST | `/tasks` | 创建任务 |
-| PATCH | `/tasks/:id` | 更新任务（乐观锁，需 version） |
-| POST | `/tasks/:id/assign` | 分配 Agent |
-| POST | `/tasks/:id/execute` | **真实执行**（调用 Claude Code + quality gate） |
-| POST | `/tasks/:id/status` | 状态流转 |
-| DELETE | `/tasks/:id` | 删除任务 |
+## 常见问题
 
-### 编排 & 监控
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/auto` | **一句话全自动**（分析→拆解→分配→执行→门禁） |
-| POST | `/orchestrate` | 分析+拆解+创建 DAG（不自动执行） |
-| GET | `/board` | 看板视图 (`?projectId=`) |
-| GET | `/stats` | 统计数据 |
-| GET | `/costs` | 费用统计 |
-| GET | `/events` | SSE 实时事件流 |
-| GET | `/health` | 健康检查 |
-| POST | `/kill-switch` | 紧急停止所有 Agent |
-| POST | `/cleanup` | 清理过期数据 |
+### 端口 5120 被占用
+
+服务器现在会自动检测端口冲突并尝试恢复。恢复不了会打印手动修复命令。
+
+你也可以自己清理：
+
+```bash
+# Windows
+netstat -ano | findstr :5120
+taskkill /pid <PID> /f
+
+# Mac/Linux
+lsof -ti:5120 | xargs kill -9
+```
+
+### pnpm 装不上
+
+```bash
+npm install -g pnpm
+```
+
+### Agent 执行报 exit -1
+
+通常是这几个原因：
+1. `ANTHROPIC_AUTH_TOKEN` 没设或设错了
+2. `ANTHROPIC_BASE_URL` 连不上
+3. 模型名 API 不认识
+4. Claude Code 进程太多被限流
+
+检查 `.claude/settings.json`。
+
+### 怎么加新的 Agent 角色
+
+1. [`seed.ts`](packages/server/src/db/seed.ts) — 加一行 `{ name, role, model }`
+2. [`execution-service.ts`](packages/server/src/engine/execution-service.ts) — 加角色指令
+3. 重启
 
 ---
 
 ## 开发
 
 ```bash
-pnpm install          # 安装依赖
-pnpm dev              # 启动开发服务器（API + Web）
-pnpm typecheck        # TypeScript 编译检查
-pnpm test             # 运行测试
-pnpm build            # 生产构建
-```
-
-### 项目结构
-
-```
-packages/
-├── shared/src/types/         # 共享类型定义
-├── server/src/
-│   ├── engine/               # 核心引擎
-│   │   ├── orchestrator      # AI 编排 (分析+分解+契约+全自动+并发控制)
-│   │   ├── execution-service # 执行管道 (role注入+skill引导+6步法+严格模式)
-│   │   ├── claude-spawn      # 统一 spawn (诊断+重试+CWD)
-│   │   ├── quality-gate      # 4道质量门禁
-│   │   ├── task-graph        # 任务 DAG + 乐观锁
-│   │   ├── capability-scorer # EMA 能力评分
-│   │   ├── shared-services   # 服务单例
-│   │   ├── runtime-pool      # 并发池
-│   │   ├── rate-limiter      # 速率限制
-│   │   └── circuit-breaker   # 断路器
-│   ├── routes/               # REST API
-│   ├── db/                   # SQLite schema v7 + migration + seed
-│   └── sse/                  # SSE 事件推送
-├── web/src/
-│   ├── components/kanban/    # 看板 (Board, Column, Card)
-│   ├── components/tasks/     # 任务 (CreateModal, DetailSheet)
-│   └── pages/                # 页面
-└── cli/src/                  # aswarm CLI
+pnpm install
+pnpm dev
+pnpm typecheck
+pnpm test
 ```
 
 ---
